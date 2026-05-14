@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from modelgen.config import ConfigError, ModelgenConfig
 from modelgen.contract import (
     ColumnTest,
     ContractError,
@@ -459,6 +460,60 @@ class TestDeterminism:
         generate(contract, introspector, out2, Layer.RAW)
         assert (out1 / "raw__user_signed_up.sql").read_text() == (out2 / "raw__user_signed_up.sql").read_text()
         assert (out1 / "raw__user_signed_up.yml").read_text() == (out2 / "raw__user_signed_up.yml").read_text()
+
+
+# ---------------------------------------------------------------------------
+# ModelgenConfig
+# ---------------------------------------------------------------------------
+
+class TestModelgenConfig:
+    def test_defaults_when_no_file(self, tmp_path):
+        cfg = ModelgenConfig.discover(tmp_path)
+        assert cfg.contracts_glob == "contracts/*.yml"
+        assert cfg.raw_output == tmp_path / "models/raw"
+        assert cfg.staging_output == tmp_path / "models/staging"
+        assert cfg.root == tmp_path
+
+    def test_from_file_reads_values(self, tmp_path):
+        f = tmp_path / ".modelgen.yml"
+        f.write_text(
+            "contracts: schemas/*.yml\n"
+            "raw_output: out/raw\n"
+            "staging_output: out/staging\n"
+        )
+        cfg = ModelgenConfig.from_file(f)
+        assert cfg.contracts_glob == "schemas/*.yml"
+        assert cfg.raw_output == tmp_path / "out/raw"
+        assert cfg.staging_output == tmp_path / "out/staging"
+
+    def test_discover_finds_config_in_parent(self, tmp_path):
+        (tmp_path / ".modelgen.yml").write_text("contracts: contracts/*.yml\n")
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        cfg = ModelgenConfig.discover(subdir)
+        assert cfg.root == tmp_path
+
+    def test_contract_files_returns_sorted(self, tmp_path):
+        contracts = tmp_path / "contracts"
+        contracts.mkdir()
+        (contracts / "b.yml").write_text("")
+        (contracts / "a.yml").write_text("")
+        cfg = ModelgenConfig._build(tmp_path, {})
+        assert [f.name for f in cfg.contract_files()] == ["a.yml", "b.yml"]
+
+    def test_malformed_config_raises(self, tmp_path):
+        f = tmp_path / ".modelgen.yml"
+        f.write_text("not: : valid: yaml: :")
+        with pytest.raises(ConfigError):
+            ModelgenConfig.from_file(f)
+
+    def test_partial_overrides_keep_defaults(self, tmp_path):
+        f = tmp_path / ".modelgen.yml"
+        f.write_text("raw_output: custom/raw\n")
+        cfg = ModelgenConfig.from_file(f)
+        assert cfg.contracts_glob == "contracts/*.yml"
+        assert cfg.raw_output == tmp_path / "custom/raw"
+        assert cfg.staging_output == tmp_path / "models/staging"
 
 
 class TestDryRun:
