@@ -1,0 +1,28 @@
+/*
+  {{ event.staging_model_name }}.sql
+  Consumption Data Product: raw -> staging
+
+  Stable contract for downstream consumers. Casts and renames are declared in
+  the contract; this layer absorbs upstream schema drift so FDPs don't break.
+  New source columns flow into raw automatically but are only surfaced here
+  once added to the contract.
+
+  Upstream: {{ event.raw_model_name }}
+  Contract: {{ contract_path }}
+*/
+
+{{ dbt_config }}
+
+with source as (
+
+    select
+        {{ raw_cols }}
+    from {{ "{{ ref('" }}{{ event.raw_model_name }}{{ "') }}" }}
+
+{{ incremental_filter }}
+
+)
+
+select
+    {{ transformed_cols }}
+from source

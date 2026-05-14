@@ -1,0 +1,128 @@
+"""
+BigQuery schema introspection. Pulled at `gen` time so contracts stay minimal
+and never drift from the source.
+
+The Introspector protocol exists so tests can inject a fake without needing
+a live BQ connection or service account.
+
+Handles BigQuery type quirks:
+- REPEATED mode wraps the field_type in ARRAY<>
+- RECORD type is rendered as STRUCT (best-effort; nested fields are flattened
+  in the description for now)
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Protocol
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IntrospectedColumn:
+    """A column as described by the warehouse."""
+
+    name: str
+    field_type: str                          # BQ type: STRING, INT64, NUMERIC, TIMESTAMP, RECORD, etc.
+    mode: str = "NULLABLE"                   # NULLABLE | REQUIRED | REPEATED
+    description: str = ""
+    fields: tuple = field(default_factory=tuple)  # For RECORD types: nested columns
+
+    @property
+    def dbt_data_type(self) -> str:
+        """Render the column type as it should appear in a dbt schema.yml."""
+        base = self.field_type
+        if self.field_type == "RECORD":
+            base = "STRUCT"
+        if self.mode == "REPEATED":
+            return f"ARRAY<{base}>"
+        return base
+
+
+class IntrospectionError(RuntimeError):
+    """Raised when the warehouse cannot be queried or the target does not exist."""
+
+
+class Introspector(Protocol):
+    """A thing that can read column metadata from a warehouse."""
+
+    def get_columns(
+        self, project: str, dataset: str, table: str
+    ) -> list[IntrospectedColumn]: ...
+
+
+class BigQueryIntrospector:
+    """
+    The production introspector. Uses Application Default Credentials.
+
+    Credentials resolution order (handled by google-auth):
+      1. GOOGLE_APPLICATION_CREDENTIALS env var
+      2. gcloud auth application-default login
+      3. Workload Identity / metadata server (when running on GCP)
+    """
+
+    def __init__(self, client=None):
+        self._client = client
+
+    @property
+    def client(self):
+        if self._client is None:
+            try:
+                from google.cloud import bigquery
+            except ImportError as e:
+                raise IntrospectionError(
+                    "google-cloud-bigquery is not installed. "
+                    "Install with: uv pip install 'modelgen'"
+                ) from e
+            self._client = bigquery.Client()
+        return self._client
+
+    def get_columns(
+        self, project: str, dataset: str, table: str
+    ) -> list[IntrospectedColumn]:
+        fqn = f"{project}.{dataset}.{table}"
+        logger.info("Introspecting %s", fqn)
+
+        try:
+            t = self.client.get_table(fqn)
+        except Exception as e:
+            raise IntrospectionError(
+                f"Failed to fetch table {fqn}. "
+                f"Check the table exists and credentials have bigquery.tables.get on it. "
+                f"Underlying: {type(e).__name__}: {e}"
+            ) from e
+
+        columns = [_field_to_column(f) for f in t.schema]
+        logger.info("Found %d columns in %s", len(columns), fqn)
+        return columns
+
+
+def _field_to_column(f) -> IntrospectedColumn:
+    """Convert a google.cloud.bigquery.SchemaField to our internal type."""
+    nested = tuple(_field_to_column(nf) for nf in (f.fields or ()))
+    return IntrospectedColumn(
+        name=f.name,
+        field_type=f.field_type,
+        mode=f.mode or "NULLABLE",
+        description=f.description or "",
+        fields=nested,
+    )
+
+
+class FakeIntrospector:
+    """For tests and offline development. Pre-populated with schemas."""
+
+    def __init__(self, schemas: dict[tuple[str, str, str], list[IntrospectedColumn]]):
+        self._schemas = schemas
+
+    def get_columns(
+        self, project: str, dataset: str, table: str
+    ) -> list[IntrospectedColumn]:
+        key = (project, dataset, table)
+        if key not in self._schemas:
+            raise IntrospectionError(
+                f"No fake schema registered for {project}.{dataset}.{table}. "
+                f"Registered: {list(self._schemas.keys())}"
+            )
+        return self._schemas[key]

@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: {{ event.staging_model_name }}
+    description: "Consumption Data Product. Stable contract for {{ event.name }}. Casts and renames here absorb upstream schema drift so downstream FDPs do not break."
+    config:
+      materialized: incremental
+      incremental_strategy: {{ event.staging.incremental_strategy }}
+      schema: {{ event.staging.dataset }}
+    columns:
+{% for col in event.staging.columns %}
+      - name: {{ col.name }}
+{% if col.type %}
+        data_type: {{ col.type }}
+{% endif %}
+{% if col.description %}
+        description: "{{ col.description | replace('"', '\\"') }}"
+{% endif %}
+{% if col.tests %}
+        tests:
+{% for test in col.tests %}
+{% if test.args %}
+          - {{ test.name }}:
+{% for k, v in test.args.items() %}
+              {{ k }}: {{ v | tojson }}
+{% endfor %}
+{% else %}
+          - {{ test.name }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
