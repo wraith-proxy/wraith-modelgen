@@ -1,0 +1,37 @@
+site_name: Modelgen CLI
+site_description: DBT Model Generator
+site_author: Thomas Peoples
+repo_url: https://git.thomaspeoples.com/thomaspeoples/modelgen
+edit_uri: edit/main/docs/
+site_url: https://www.thomaspeoples.com/gitea-repos/modelgen/
+use_directory_urls: true
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: teal
+      accent: cyan
+  features:
+    - navigation.tabs
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Usage: usage.md
+  - Technical Reference: reference.md
+  - Architecture Reference: architecture.md
+  - Security Statement: security.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - pymdownx.snippets:
+      base_path: ["."]
+
+extra:
+  links:
+    - icon: material/home
+      link: https://www.thomaspeoples.com/
+      name: Back to Main Site

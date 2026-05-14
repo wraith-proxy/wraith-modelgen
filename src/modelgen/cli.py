@@ -9,6 +9,7 @@ from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
 
+from modelgen import __version__
 from modelgen.contract import EventContract, ContractError
 from modelgen.generator import Layer, generate, GenerationError
 from modelgen.introspect import IntrospectionError
@@ -17,8 +18,29 @@ app = typer.Typer(
     name="modelgen",
     help="BigQuery dbt model scaffolder. Generates one layer at a time from a YAML data contract.",
     no_args_is_help=True,
+    rich_markup_mode="rich",
 )
 console = Console()
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        console.print(f"modelgen {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    pass
 
 
 def _configure_logging(verbose: bool) -> None:

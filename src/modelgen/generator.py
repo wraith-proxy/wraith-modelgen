@@ -8,6 +8,7 @@ generated files against committed ones to catch contract drift.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field as dc_field
 from enum import Enum
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from modelgen.introspect import Introspector, IntrospectedColumn
 
 logger = logging.getLogger(__name__)
 
-_TEMPLATE_DIR = Path(__file__).parent / "templates"
+_TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 
 
 class Layer(str, Enum):
@@ -293,6 +294,13 @@ def _render_incremental_filter(loaded_at_field: str, upstream_loaded_at_field: s
     )
 
 
+@dataclass
+class GenerationResult:
+    written: list[Path]
+    new_source_columns: list[str] = dc_field(default_factory=list)
+    introspected_columns: list[IntrospectedColumn] = dc_field(default_factory=list)
+
+
 def generate(
     contract: EventContract,
     introspector: Introspector,
@@ -324,13 +332,3 @@ def generate(
         new_source_columns=new_cols,
         introspected_columns=introspected,
     )
-
-
-from dataclasses import dataclass, field as dc_field
-
-
-@dataclass
-class GenerationResult:
-    written: list[Path]
-    new_source_columns: list[str] = dc_field(default_factory=list)
-    introspected_columns: list[IntrospectedColumn] = dc_field(default_factory=list)
