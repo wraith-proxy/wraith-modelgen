@@ -1,9 +1,9 @@
-site_name: Modelgen CLI
+site_name: Wraith Modelgen CLI
 site_description: DBT Model Generator
 site_author: Thomas Peoples
-repo_url: https://git.thomaspeoples.com/thomaspeoples/modelgen
+repo_url: https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen
 edit_uri: edit/main/docs/
-site_url: https://www.thomaspeoples.com/gitea-repos/modelgen/
+site_url: https://www.thomaspeoples.com/gitea-repos/wraith-modelgen/
 use_directory_urls: true
 
 theme:

@@ -1,4 +1,4 @@
-# modelgen
+# wraith-modelgen
 
 BigQuery dbt model scaffolder. Generates Origin and Consumption Data Products from a single YAML contract.
 
@@ -117,7 +117,7 @@ For `--staging`:
 ## Testing
 
 ```bash
-pytest tests/ -v
+uv run poe test-ci
 ```
 
 The test suite uses `FakeIntrospector` and runs without BigQuery credentials. Covers contract parsing, both layers, the schema evolution scenarios, composite keys, REPEATED/RECORD types, determinism, and the error surfaces.
