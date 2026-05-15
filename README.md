@@ -25,12 +25,12 @@ When source changes, the source team updates the contract as part of their relea
 ### Installation
 
 ```bash
-git clone <repository-url>
+git clone https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen
 cd wraith-modelgen
 uv run poe setup        # syncs deps + installs pre-commit hooks
 ```
 
-## Install
+## Install Package
 
 ```bash
 uv pip install -e .
@@ -131,10 +131,25 @@ For `--staging`:
 - **Strict failure on missing columns.** No silent passes. If the contract references a column the source no longer has, generation fails with the column name.
 - **No silent ignores of new source columns.** They appear in raw and are surfaced in the CLI output so you know they exist, but they don't enter staging until you opt them in.
 
-## Testing
+## Development
 
 ```bash
-uv run poe test-ci
+uv run poe test         # pytest (interactive)
+uv run poe test-ci      # pytest with coverage enforcement (≥80%)
+uv run poe lint         # ruff check
+uv run poe format       # ruff format
+```
+
+### Committing
+
+All commits go through `commitizen` with the Ghost Stack convention:
+
+```
+👻 <type>/<ticket>: <message>
+```
+
+```bash
+uv run cz commit
 ```
 
 The test suite uses `FakeIntrospector` and runs without BigQuery credentials. Covers contract parsing, both layers, the schema evolution scenarios, composite keys, REPEATED/RECORD types, determinism, and the error surfaces.
