@@ -13,6 +13,23 @@ modelgen makes the data contract the change-management mechanism:
 
 When source changes, the source team updates the contract as part of their release. modelgen regenerates the dbt models. Downstream sees what it sees. Nothing breaks unless something it actually depended on disappeared, at which point you want to know.
 
+## Getting started
+
+### Prerequisites
+
+- Python >= 3.12
+- [`uv`](https://github.com/astral-sh/uv)
+  - **macOS/Linux**: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+  - **Windows**: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+
+### Installation
+
+```bash
+git clone <repository-url>
+cd wraith-modelgen
+uv run poe setup        # syncs deps + installs pre-commit hooks
+```
+
 ## Install
 
 ```bash
