@@ -46,9 +46,10 @@ dev = [
 
 [project.urls]
 Homepage = "https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen"
-Repository = "https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen"
+Repository = "https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen.git"
+Documentation = "https://www.thomaspeoples.com/gitea-repos/wraith-modelgen/"
 Issues = "https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/issues"
-Changelog = "https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/blob/main/CHANGELOG.md"
+Changelog = "https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/src/branch/main/CHANGELOG.md"
 
 [project.scripts]
 modelgen = "modelgen.cli:main"
