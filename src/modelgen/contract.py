@@ -5,6 +5,7 @@ The contract is the source of truth. Source teams maintain it as part of
 their release process. modelgen propagates contract changes to dbt models;
 downstream FDPs see a stable interface because staging absorbs the drift.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -26,29 +27,33 @@ class ColumnTest:
     args: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "ColumnTest":
+    def from_raw(cls, raw: Any) -> ColumnTest:
         if isinstance(raw, str):
             return cls(name=raw)
         if isinstance(raw, dict):
             if len(raw) != 1:
                 raise ContractError(
-                    f"Test entry must have exactly one key, got: {list(raw.keys())}"
+                    "Test entry must have exactly one key, "
+                    f"got: {list(raw.keys())}"
                 )
-            name = next(iter(raw))
+            name = str(next(iter(raw)))
             args = raw[name] or {}
             if not isinstance(args, dict):
-                raise ContractError(f"Test args for {name!r} must be a mapping, got {type(args).__name__}")
+                raise ContractError(
+                    f"Test args for {name!r} must be a mapping, "
+                    f"got {type(args).__name__}"
+                )
             return cls(name=name, args=args)
         raise ContractError(f"Unrecognised test format: {raw!r}")
 
 
 @dataclass
 class StagingColumn:
-    """One column in the staging contract: source ref + rename + cast + tests."""
+    """One column in staging: source ref + rename + cast + tests."""
 
-    source: str                              # column name in raw (== source column name)
-    name: str = ""                           # column name in staging (default: source.lower())
-    type: str = ""                           # BigQuery type to cast to (default: no cast)
+    source: str  # column name in raw (== source column name)
+    name: str = ""  # column name in staging (default: source.lower())
+    type: str = ""  # BigQuery type to cast to (default: no cast)
     description: str = ""
     tests: list[ColumnTest] = field(default_factory=list)
 
@@ -67,7 +72,7 @@ class StagingColumn:
         return self.source != self.name
 
     @classmethod
-    def from_raw(cls, raw: dict) -> "StagingColumn":
+    def from_raw(cls, raw: dict) -> StagingColumn:
         if "source" not in raw:
             raise ContractError(f"Staging column missing 'source': {raw}")
         return cls(
@@ -88,16 +93,22 @@ class SourceRef:
     table: str
 
     def __post_init__(self):
-        for label, value in [("project", self.project), ("dataset", self.dataset), ("table", self.table)]:
+        for label, value in [
+            ("project", self.project),
+            ("dataset", self.dataset),
+            ("table", self.table),
+        ]:
             if not value or not isinstance(value, str):
-                raise ContractError(f"source.{label} must be a non-empty string.")
+                raise ContractError(
+                    f"source.{label} must be a non-empty string."
+                )
 
     @property
     def fqn(self) -> str:
         return f"{self.project}.{self.dataset}.{self.table}"
 
     @classmethod
-    def from_raw(cls, raw: dict) -> "SourceRef":
+    def from_raw(cls, raw: dict) -> SourceRef:
         if not raw:
             raise ContractError("Contract missing 'source' block.")
         return cls(
@@ -116,7 +127,7 @@ class PartitionConfig:
     granularity: str = "day"
 
     @classmethod
-    def from_raw(cls, raw: dict | None) -> "PartitionConfig | None":
+    def from_raw(cls, raw: dict | None) -> PartitionConfig | None:
         if raw is None:
             return None
         if "field" not in raw:
@@ -137,7 +148,7 @@ class RawConfig:
     cluster_by: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_raw(cls, raw: dict | None) -> "RawConfig":
+    def from_raw(cls, raw: dict | None) -> RawConfig:
         raw = raw or {}
         cluster_by = raw.get("cluster_by", [])
         if isinstance(cluster_by, str):
@@ -160,7 +171,7 @@ class StagingConfig:
     cluster_by: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_raw(cls, raw: dict | None) -> "StagingConfig":
+    def from_raw(cls, raw: dict | None) -> StagingConfig:
         raw = raw or {}
         cluster_by = raw.get("cluster_by", [])
         if isinstance(cluster_by, str):
@@ -168,7 +179,9 @@ class StagingConfig:
         return cls(
             dataset=raw.get("dataset", "staging"),
             incremental_strategy=raw.get("incremental_strategy", "merge"),
-            columns=[StagingColumn.from_raw(c) for c in raw.get("columns", [])],
+            columns=[
+                StagingColumn.from_raw(c) for c in raw.get("columns", [])
+            ],
             partition_by=PartitionConfig.from_raw(raw.get("partition_by")),
             cluster_by=cluster_by,
         )
@@ -180,8 +193,10 @@ def _normalise_unique_key(raw: Any) -> list[str]:
     if isinstance(raw, list) and all(isinstance(k, str) for k in raw):
         if not raw:
             raise ContractError("unique_key list cannot be empty.")
-        return list(raw)
-    raise ContractError(f"unique_key must be a string or list of strings, got {raw!r}")
+        return [str(k) for k in raw]
+    raise ContractError(
+        f"unique_key must be a string or list of strings, got {raw!r}"
+    )
 
 
 @dataclass
@@ -211,14 +226,17 @@ class EventContract:
         return "[" + ", ".join(f"'{k}'" for k in self.unique_key) + "]"
 
     @classmethod
-    def from_file(cls, path: Path) -> "EventContract":
+    def from_file(cls, path: Path) -> EventContract:
         try:
             raw_yaml = yaml.safe_load(path.read_text())
         except yaml.YAMLError as e:
             raise ContractError(f"Failed to parse YAML at {path}: {e}") from e
 
         if not isinstance(raw_yaml, dict):
-            raise ContractError(f"Contract root must be a mapping, got {type(raw_yaml).__name__}")
+            raise ContractError(
+                "Contract root must be a mapping, "
+                f"got {type(raw_yaml).__name__}"
+            )
 
         version = str(raw_yaml.get("version", ""))
         if version not in SUPPORTED_CONTRACT_VERSIONS:

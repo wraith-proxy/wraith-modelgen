@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -11,13 +10,16 @@ from rich.panel import Panel
 from rich.table import Table
 
 from modelgen import __version__
-from modelgen.contract import EventContract, ContractError
-from modelgen.generator import Layer, generate, GenerationError
+from modelgen.contract import ContractError, EventContract
+from modelgen.generator import GenerationError, Layer, generate
 from modelgen.introspect import IntrospectionError
 
 app = typer.Typer(
     name="modelgen",
-    help="BigQuery dbt model scaffolder. Generates one layer at a time from a YAML data contract.",
+    help=(
+        "BigQuery dbt model scaffolder. Generates one layer"
+        " at a time from a YAML data contract."
+    ),
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
@@ -50,7 +52,11 @@ def _configure_logging(verbose: bool) -> None:
         level=level,
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[RichHandler(console=console, rich_tracebacks=False, show_path=False)],
+        handlers=[
+            RichHandler(
+                console=console, rich_tracebacks=False, show_path=False
+            )
+        ],
     )
 
 
@@ -62,16 +68,28 @@ def gen(
         exists=True,
         readable=True,
     ),
-    raw: bool = typer.Option(False, "--raw", help="Generate the raw (Origin Data Product) layer."),
-    staging: bool = typer.Option(False, "--staging", help="Generate the staging (Consumption Data Product) layer."),
+    raw: bool = typer.Option(
+        False, "--raw", help="Generate the raw (Origin Data Product) layer."
+    ),
+    staging: bool = typer.Option(
+        False,
+        "--staging",
+        help="Generate the staging (Consumption Data Product) layer.",
+    ),
     output: Path = typer.Option(
         Path("./models"),
         "--output",
         "-o",
         help="Directory to write generated files into.",
     ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Print what would be generated without writing."),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print what would be generated without writing.",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable debug logging."
+    ),
 ):
     """
     Generate a dbt model layer from a YAML data contract.
@@ -96,10 +114,17 @@ def gen(
         raise typer.Exit(1)
 
     from modelgen.introspect import BigQueryIntrospector
+
     introspector = BigQueryIntrospector()
 
-    target_dataset = event.raw.dataset if layer == Layer.RAW else event.staging.dataset
-    target_model = event.raw_model_name if layer == Layer.RAW else event.staging_model_name
+    target_dataset = (
+        event.raw.dataset if layer == Layer.RAW else event.staging.dataset
+    )
+    target_model = (
+        event.raw_model_name
+        if layer == Layer.RAW
+        else event.staging_model_name
+    )
 
     console.print(
         Panel(
@@ -136,17 +161,21 @@ def gen(
     table.add_column("File")
     table.add_column("Status")
     for path in result.written:
-        status = "[yellow]dry-run[/yellow]" if dry_run else "[green]written[/green]"
+        status = (
+            "[yellow]dry-run[/yellow]" if dry_run else "[green]written[/green]"
+        )
         table.add_row(str(path), status)
     console.print(table)
 
     if result.new_source_columns:
         console.print(
             Panel(
-                f"Source has {len(result.new_source_columns)} column(s) not yet in the staging contract:\n"
+                f"Source has {len(result.new_source_columns)} column(s)"
+                " not yet in the staging contract:\n"
                 f"  {', '.join(result.new_source_columns)}\n\n"
-                f"[dim]These flow through raw automatically. Add to the staging contract when "
-                f"downstream consumers need them.[/dim]",
+                "[dim]These flow through raw automatically. "
+                "Add to the staging contract when "
+                "downstream consumers need them.[/dim]",
                 title="[yellow]Schema evolution detected[/yellow]",
                 border_style="yellow",
             )
@@ -178,20 +207,30 @@ def validate(
 
 @app.command()
 def run(
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None,
         "--config",
         "-c",
-        help="Path to .modelgen.yml. Auto-discovered from cwd upward if not given.",
+        help=(
+            "Path to .modelgen.yml. Auto-discovered from cwd"
+            " upward if not given."
+        ),
     ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Print what would be generated without writing."),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print what would be generated without writing.",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable debug logging."
+    ),
 ):
     """
     Discover all contracts in the repo and generate dbt models for every layer.
 
     \b
-    Reads .modelgen.yml (or uses opinionated defaults) to find contracts and write to:
+    Reads .modelgen.yml (or uses opinionated defaults) to find contracts
+    and write to:
       models/raw/     — raw (Origin Data Product) layer
       models/staging/ — staging layer (skipped if no columns declared)
 
@@ -203,7 +242,7 @@ def run(
     """
     _configure_logging(verbose)
 
-    from modelgen.config import ModelgenConfig, ConfigError
+    from modelgen.config import ConfigError, ModelgenConfig
     from modelgen.introspect import BigQueryIntrospector
 
     try:
@@ -219,7 +258,8 @@ def run(
     if not contract_files:
         console.print(
             f"[yellow]No contracts found.[/yellow] "
-            f"Pattern [dim]{cfg.contracts_glob!r}[/dim] matched nothing in {cfg.root}"
+            f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
+            f" matched nothing in {cfg.root}"
         )
         raise typer.Exit(0)
 
@@ -267,7 +307,11 @@ def run(
                 contract_path=str(rel),
                 dry_run=dry_run,
             )
-            status = "[yellow]dry-run[/yellow]" if dry_run else "[green]written[/green]"
+            status = (
+                "[yellow]dry-run[/yellow]"
+                if dry_run
+                else "[green]written[/green]"
+            )
             for p in raw_result.written:
                 table.add_row(contract_path.name, "raw", p.name, status)
         except (GenerationError, IntrospectionError) as e:
@@ -286,11 +330,17 @@ def run(
                 contract_path=str(rel),
                 dry_run=dry_run,
             )
-            status = "[yellow]dry-run[/yellow]" if dry_run else "[green]written[/green]"
+            status = (
+                "[yellow]dry-run[/yellow]"
+                if dry_run
+                else "[green]written[/green]"
+            )
             for p in stg_result.written:
                 table.add_row(contract_path.name, "staging", p.name, status)
             if stg_result.new_source_columns:
-                new_cols_notices.append((event.name, stg_result.new_source_columns))
+                new_cols_notices.append(
+                    (event.name, stg_result.new_source_columns)
+                )
         except (GenerationError, IntrospectionError) as e:
             errors.append((contract_path.name, "staging", str(e)))
 
@@ -299,9 +349,11 @@ def run(
     for event_name, cols in new_cols_notices:
         console.print(
             Panel(
-                f"[bold]{event_name}[/bold]: {len(cols)} source column(s) not yet in staging contract:\n"
+                f"[bold]{event_name}[/bold]: {len(cols)} source"
+                " column(s) not yet in staging contract:\n"
                 f"  {', '.join(cols)}\n\n"
-                f"[dim]These flow through raw automatically. Add to staging when consumers need them.[/dim]",
+                "[dim]These flow through raw automatically. "
+                "Add to staging when consumers need them.[/dim]",
                 title="[yellow]Schema evolution detected[/yellow]",
                 border_style="yellow",
             )
