@@ -31,3 +31,5 @@ Three-layer generation (landing -> raw -> staging) with SQLAlchemy-based introsp
 ## 0.1.0
 
 Initial release. Single-layer staging model from YAML contract.
+
+## v0.1.0 (2026-05-16)
