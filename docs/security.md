@@ -1,8 +1,8 @@
-# Security Statement
+# 👻 Security Statement
 
 ## Credentials
 
-modelgen uses Google Application Default Credentials (ADC) to connect to BigQuery. It never stores, logs, or transmits credentials. The credential resolution order is:
+wraith-modelgen uses Google Application Default Credentials (ADC) to connect to BigQuery. It never stores, logs, or transmits credentials. The credential resolution order is:
 
 1. `GOOGLE_APPLICATION_CREDENTIALS` env var (service account key file)
 2. `gcloud auth application-default login` (user credentials)
@@ -12,7 +12,7 @@ The minimum BigQuery permission required is `bigquery.tables.get` on the source 
 
 ## No data access
 
-modelgen only reads table **schema metadata** (column names and types). It never reads row data from your BigQuery tables.
+wraith-modelgen only reads table **schema metadata** (column names and types). It never reads row data from your BigQuery tables.
 
 ## Contract files
 

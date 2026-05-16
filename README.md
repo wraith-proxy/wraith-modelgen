@@ -1,48 +1,34 @@
-# wraith-modelgen
+[![Documentation](https://img.shields.io/badge/docs-live-brightgreen)](https://www.thomaspeoples.com/gitea-repos/wraith-modelgen/)
+![PyPI - Version](https://img.shields.io/pypi/v/wraith-modelgen)
+![PyPI - License](https://img.shields.io/pypi/l/wraith-modelgen)
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/wraith-modelgen)
 
-BigQuery dbt model scaffolder. Generates Origin and Consumption Data Products from a single YAML contract.
+# 👻 wraith-modelgen
+### *Sovereign dbt Scaffolding for the Ghost Stack*
 
-## Why this exists
+**wraith-modelgen** is a BigQuery dbt model scaffolder. Feed it a YAML data contract, get back a pair of sovereign data products: an Origin (raw) layer that passes everything through, and a Consumption (staging) layer that holds the stable line for downstream consumers.
 
 Source schemas change. Columns get renamed. Types get tightened. New fields appear without ceremony. In most analytics codebases this is a downstream catastrophe: dashboards break, FDPs fail, the analytics team gets paged at 03:00, and someone files a ticket asking whether dbt itself is broken.
 
-modelgen makes the data contract the change-management mechanism:
+wraith-modelgen makes the data contract the change-management mechanism. The source team updates it as part of their release. wraith-modelgen regenerates the models. Downstream sees what it sees. Nothing breaks unless something it actually depended on disappeared — at which point you want to know.
 
-- **Origin Data Product** (`raw__event`): `select *` from landing with optional dedup. New columns flow through automatically.
-- **Consumption Data Product** (`stg__event`): explicit renames, casts, and tests. The stable interface downstream consumes.
+---
 
-When source changes, the source team updates the contract as part of their release. modelgen regenerates the dbt models. Downstream sees what it sees. Nothing breaks unless something it actually depended on disappeared, at which point you want to know.
-
-## Getting started
-
-### Prerequisites
-
-- Python >= 3.12
-- [`uv`](https://github.com/astral-sh/uv)
-  - **macOS/Linux**: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-  - **Windows**: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
-
-### Installation
+## 🚀 Installation
 
 ```bash
-git clone https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen
-cd wraith-modelgen
-uv run poe setup        # syncs deps + installs pre-commit hooks
+uv tool install wraith-modelgen
 ```
 
-## Install Package
-
-```bash
-uv pip install -e .
-```
-
-You'll also want Application Default Credentials configured for BigQuery:
+You'll also need Application Default Credentials for BigQuery introspection:
 
 ```bash
 gcloud auth application-default login
 ```
 
-## Workflow
+---
+
+## ⚙️ Workflow
 
 ```bash
 modelgen gen contract.yml --raw     -o ./models/raw
@@ -51,7 +37,14 @@ modelgen gen contract.yml --staging -o ./models/staging
 
 One layer per invocation. `--raw` and `--staging` are mutually exclusive.
 
-## Contract anatomy
+```bash
+modelgen validate contract.yml      # validate YAML without hitting BigQuery
+modelgen gen contract.yml --raw --dry-run  # preview without writing
+```
+
+---
+
+## 📄 Contract anatomy
 
 ```yaml
 version: "1"
@@ -93,52 +86,49 @@ event:
         tests: [not_null, unique]
 ```
 
-## Schema evolution
+---
 
-| Source change                | What modelgen does                         | What you do                          |
-|------------------------------|--------------------------------------------|--------------------------------------|
-| Adds a column                | Flows into raw via `select *`. Invisible in staging. | Add it to staging when consumers need it. |
-| Renames a column             | Validation fails: column not found in source. | Update the `source:` field on that column. Also `unique_key` / `loaded_at_field` if applicable. |
-| Retypes a column             | Existing CAST in staging absorbs it (or fails loudly at query time if values are incompatible). | Update `type:` if the canonical type should change too. |
-| Drops a column staging uses  | Validation fails: column not found.        | Either restore upstream or remove from staging contract. |
+## 🔄 Schema evolution
 
-The validation runs as part of `modelgen gen --staging`. If it passes, your generated staging model still presents the same contract to downstream consumers.
+| Source change | What wraith-modelgen does | What you do |
+|---|---|---|
+| Adds a column | Flows into raw via `select *`. Invisible in staging. | Add it to staging when consumers need it. |
+| Renames a column | Validation fails: column not found in source. | Update the `source:` field on that column. Also `unique_key` / `loaded_at_field` if applicable. |
+| Retypes a column | Existing CAST in staging absorbs it (or fails loudly at query time if values are incompatible). | Update `type:` if the canonical type should change too. |
+| Drops a column staging uses | Validation fails: column not found. | Either restore upstream or remove from staging contract. |
 
-## CLI
+Validation runs as part of `modelgen gen --staging`. If it passes, the generated staging model still presents the same contract to downstream consumers.
 
-```text
-modelgen gen CONTRACT [--raw|--staging] [--output DIR] [--dry-run] [--verbose]
-modelgen validate CONTRACT
-```
+---
 
-`validate` checks contract YAML without hitting BigQuery. `gen --dry-run` runs introspection and templating but writes nothing.
+## 🏗️ What gets generated
 
-## What gets generated
+**For `--raw`:**
+- `raw__event.sql` — dbt incremental model with `{{ source(...) }}`, optional dedup window, partition and cluster config.
+- `raw__event.yml` — dbt sources entry plus model definition. Columns mirror the introspected source schema.
 
-For `--raw`:
-- `raw__event.sql`: dbt incremental model with `{{ source(...) }}`, optional dedup window, partition_by and cluster_by config.
-- `raw__event.yml`: dbt sources entry plus model definition. Columns mirror the introspected source schema.
+**For `--staging`:**
+- `stg__event.sql` — dbt incremental model with `{{ ref('raw__event') }}`. Casts and renames applied.
+- `stg__event.yml` — model definition with column tests from the contract.
 
-For `--staging`:
-- `stg__event.sql`: dbt incremental model with `{{ ref('raw__event') }}`. Casts and renames applied. Filter uses the source-side column name against upstream and staging-side name against `this`.
-- `stg__event.yml`: model definition with column tests from the contract.
+---
 
-## Architecture notes
-
-- **One layer per invocation.** Layers have different lifecycles; conflating them in one command made things harder to reason about.
-- **Introspection at gen time.** The contract is minimal; the warehouse is the source of truth for column names and types in source. Drift is impossible because nothing is duplicated.
-- **Deterministic output.** Same contract + same source schema = byte-identical files. CI can diff against committed output to catch drift between contract and source.
-- **Strict failure on missing columns.** No silent passes. If the contract references a column the source no longer has, generation fails with the column name.
-- **No silent ignores of new source columns.** They appear in raw and are surfaced in the CLI output so you know they exist, but they don't enter staging until you opt them in.
-
-## Development
+## 🧪 Developer Quality Gate
 
 ```bash
+# Clone and set up
+git clone https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen
+cd wraith-modelgen
+uv run poe setup        # syncs deps + installs pre-commit hooks
+
+# The quality gate
 uv run poe test         # pytest (interactive)
 uv run poe test-ci      # pytest with coverage enforcement (≥80%)
 uv run poe lint         # ruff check
 uv run poe format       # ruff format
 ```
+
+The test suite uses `FakeIntrospector` and runs without BigQuery credentials. Covers contract parsing, both layers, schema evolution scenarios, composite keys, REPEATED/RECORD types, determinism, and error surfaces.
 
 ### Committing
 
@@ -152,9 +142,16 @@ All commits go through `commitizen` with the Ghost Stack convention:
 uv run cz commit
 ```
 
-The test suite uses `FakeIntrospector` and runs without BigQuery credentials. Covers contract parsing, both layers, the schema evolution scenarios, composite keys, REPEATED/RECORD types, determinism, and the error surfaces.
+---
 
-## Limitations
+## 📜 Sovereign Principles
 
-- BigQuery only. The introspection module is BQ-native (uses `google-cloud-bigquery`, not SQLAlchemy). Add a different `Introspector` implementation if you need another warehouse.
-- Staging transformations are limited to `cast(x as Y) as z` and `x as z`. Arbitrary SQL expressions in staging columns are not supported. The constraint is deliberate: the staging contract should be readable as a contract, not as code.
+1. **One layer per invocation.** Layers have different lifecycles; conflating them makes things harder to reason about.
+2. **Introspection at gen time.** The warehouse is the source of truth for column names and types. Drift is impossible because nothing is duplicated.
+3. **Deterministic output.** Same contract + same source schema = byte-identical files. CI can diff against committed output to catch drift.
+4. **Strict failure on missing columns.** No silent passes. If the contract references a column the source no longer has, generation fails with the column name.
+5. **BigQuery only.** The introspection module is BQ-native. Add a different `Introspector` implementation if you need another warehouse.
+
+---
+
+*Part of the [Ghost Stack](https://git.thomaspeoples.com/thomaspeoples). Sovereign. Self-hosted. No nonsense.*

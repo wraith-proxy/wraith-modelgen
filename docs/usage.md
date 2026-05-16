@@ -1,4 +1,4 @@
-# Usage
+# 👻 Usage
 
 ## Commands
 
@@ -45,7 +45,7 @@ modelgen validate contract.yml
 
 ## Contract file
 
-See [`example_contract.yml`](https://git.thomaspeoples.com/thomaspeoples/modelgen/src/branch/main/example_contract.yml) for a fully-annotated example.
+See [`example_contract.yml`](https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/src/branch/main/example_contract.yml) for a fully-annotated example.
 
 ### Schema evolution
 
