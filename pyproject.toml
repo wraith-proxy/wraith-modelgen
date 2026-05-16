@@ -1,6 +1,6 @@
 [project]
 name = "wraith-modelgen"
-version = "0.1.0"
+version = "0.2.0"
 description = "BigQuery dbt model scaffolder from YAML data contracts. Generates Data Products with auto introspection."
 readme = "README.md"
 license = { file = "LICENSE" }
