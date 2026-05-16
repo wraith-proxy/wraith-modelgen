@@ -45,10 +45,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/thomaspeoples/modelgen"
-Repository = "https://git.thomaspeoples.com/thomaspeoples/modelgen"
-Issues = "https://git.thomaspeoples.com/thomaspeoples/modelgen/issues"
-Changelog = "https://git.thomaspeoples.com/thomaspeoples/modelgen/blob/main/CHANGELOG.md"
+Homepage = "https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen"
+Repository = "https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen"
+Issues = "https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/issues"
+Changelog = "https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/blob/main/CHANGELOG.md"
 
 [project.scripts]
 modelgen = "modelgen.cli:main"

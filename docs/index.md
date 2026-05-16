@@ -1,18 +1,22 @@
-# modelgen
+# 👻 wraith-modelgen
 
-BigQuery dbt model scaffolder. Generates raw and staging dbt models from a YAML data contract.
+*BigQuery dbt model scaffolder for the Ghost Stack. One YAML contract, two sovereign data products.*
+
+---
 
 ## What it does
 
-Given a YAML data contract describing a BigQuery source table, `modelgen` generates:
+Given a YAML data contract describing a BigQuery source table, `wraith-modelgen` generates:
 
 - **Raw model** (`raw__<event>.sql` + `.yml`) — a pass-through incremental model with optional dedup via `row_number()`. Schema mirrors source; new columns flow through automatically.
 - **Staging model** (`stg__<event>.sql` + `.yml`) — a consumer-facing contract with explicit column selection, renames, and casts. Absorbs upstream schema drift so downstream never sees it.
 
+Source schema changes are the source team's problem. Not yours.
+
 ## Install
 
 ```bash
-uv tool install modelgen
+uv tool install wraith-modelgen
 ```
 
 ## Quick start
@@ -40,3 +44,7 @@ gcloud auth application-default login
 ```
 
 Or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key file.
+
+---
+
+*Part of the [Ghost Stack](https://git.thomaspeoples.com/thomaspeoples). Sovereign. Self-hosted. No nonsense.*
