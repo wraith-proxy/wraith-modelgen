@@ -1,4 +1,4 @@
-# modelgen
+# wraith-modelgen
 
 BigQuery dbt model scaffolder. Generates Origin and Consumption Data Products from a single YAML contract.
 
@@ -13,7 +13,24 @@ modelgen makes the data contract the change-management mechanism:
 
 When source changes, the source team updates the contract as part of their release. modelgen regenerates the dbt models. Downstream sees what it sees. Nothing breaks unless something it actually depended on disappeared, at which point you want to know.
 
-## Install
+## Getting started
+
+### Prerequisites
+
+- Python >= 3.12
+- [`uv`](https://github.com/astral-sh/uv)
+  - **macOS/Linux**: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+  - **Windows**: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+
+### Installation
+
+```bash
+git clone https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen
+cd wraith-modelgen
+uv run poe setup        # syncs deps + installs pre-commit hooks
+```
+
+## Install Package
 
 ```bash
 uv pip install -e .
@@ -114,10 +131,25 @@ For `--staging`:
 - **Strict failure on missing columns.** No silent passes. If the contract references a column the source no longer has, generation fails with the column name.
 - **No silent ignores of new source columns.** They appear in raw and are surfaced in the CLI output so you know they exist, but they don't enter staging until you opt them in.
 
-## Testing
+## Development
 
 ```bash
-pytest tests/ -v
+uv run poe test         # pytest (interactive)
+uv run poe test-ci      # pytest with coverage enforcement (≥80%)
+uv run poe lint         # ruff check
+uv run poe format       # ruff format
+```
+
+### Committing
+
+All commits go through `commitizen` with the Ghost Stack convention:
+
+```
+👻 <type>/<ticket>: <message>
+```
+
+```bash
+uv run cz commit
 ```
 
 The test suite uses `FakeIntrospector` and runs without BigQuery credentials. Covers contract parsing, both layers, the schema evolution scenarios, composite keys, REPEATED/RECORD types, determinism, and the error surfaces.

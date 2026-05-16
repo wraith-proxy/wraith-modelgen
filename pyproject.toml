@@ -1,7 +1,22 @@
 [project]
-name = "modelgen"
-version = "0.3.0"
+name = "wraith-modelgen"
+version = "0.0.1"
 description = "BigQuery dbt model scaffolder from YAML data contracts. Generates Data Products with auto introspection."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Thomas Peoples", email = "hello@thomaspeoples.com" },
+]
+keywords = ["dbt", "bigquery", "data-contracts", "scaffold", "analytics-engineering"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Code Generators",
+]
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.12.0",
@@ -25,7 +40,14 @@ dev = [
     "poethepoet",
     "pydoc-markdown",
     "typer",
+    "detect-secrets",
 ]
+
+[project.urls]
+Homepage = "https://github.com/thomaspeoples/modelgen"
+Repository = "https://git.thomaspeoples.com/thomaspeoples/modelgen"
+Issues = "https://git.thomaspeoples.com/thomaspeoples/modelgen/issues"
+Changelog = "https://git.thomaspeoples.com/thomaspeoples/modelgen/blob/main/CHANGELOG.md"
 
 [project.scripts]
 modelgen = "modelgen.cli:main"
@@ -43,6 +65,7 @@ test = "pytest"
 test-ci = "pytest --cov=src tests/ --cov-report=term-missing --cov-fail-under=80"
 lint = "ruff check ."
 format = "ruff format ."
+tidy = ["lint", "format"]
 docs-build = "mkdocs build"
 docs-serve = "mkdocs serve"
 
@@ -77,3 +100,8 @@ line-length = 79
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[dependency-groups]
+dev = [
+    "detect-secrets>=1.5.0",
+]

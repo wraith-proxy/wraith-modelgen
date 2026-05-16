@@ -5,17 +5,19 @@ The generator is deterministic: given the same contract and the same source
 schema, it produces byte-identical output. This is intentional. CI can diff
 generated files against committed ones to catch contract drift.
 """
+
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from enum import Enum
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from modelgen.contract import EventContract, StagingColumn, ContractError
-from modelgen.introspect import Introspector, IntrospectedColumn
+from modelgen.contract import EventContract, StagingColumn
+from modelgen.introspect import IntrospectedColumn, Introspector
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +80,17 @@ def _validate_staging_against_source(
     """Fail fast if the staging contract references columns that don't exist
     in source. This is the moment schema drift is caught."""
     source_names = {c.name for c in introspected}
-    missing = [c.source for c in contract.staging.columns if c.source not in source_names]
+    missing = [
+        c.source
+        for c in contract.staging.columns
+        if c.source not in source_names
+    ]
     if missing:
         raise GenerationError(
-            f"Staging contract references {len(missing)} column(s) not present in "
-            f"{contract.source.fqn}: {missing}. "
-            f"Source schema may have evolved. Update the contract to match, or remove these columns."
+            f"Staging contract references {len(missing)} column(s)"
+            f" not present in {contract.source.fqn}: {missing}. "
+            "Source schema may have evolved. Update the contract"
+            " to match, or remove these columns."
         )
 
 
@@ -91,7 +98,7 @@ def _new_source_columns(
     contract: EventContract,
     introspected: list[IntrospectedColumn],
 ) -> list[str]:
-    """Source columns that aren't yet in the staging contract. Informational only;
+    """Source columns not yet in the staging contract. Informational only;
     new columns flow through raw via select *."""
     declared = {c.source for c in contract.staging.columns}
     return [c.name for c in introspected if c.name not in declared]
@@ -106,12 +113,14 @@ def _validate_keys_present(
     for key in contract.unique_key:
         if key not in source_names:
             raise GenerationError(
-                f"unique_key column {key!r} not found in source {contract.source.fqn}. "
+                f"unique_key column {key!r} not found in"
+                f" source {contract.source.fqn}. "
                 f"Available columns: {sorted(source_names)}"
             )
     if contract.loaded_at_field not in source_names:
         raise GenerationError(
-            f"loaded_at_field {contract.loaded_at_field!r} not found in source {contract.source.fqn}."
+            f"loaded_at_field {contract.loaded_at_field!r}"
+            f" not found in source {contract.source.fqn}."
         )
 
 
@@ -162,8 +171,12 @@ def render_raw(
         ),
     }
     return {
-        f"{contract.raw_model_name}.sql": env.get_template("raw.sql.j2").render(ctx),
-        f"{contract.raw_model_name}.yml": env.get_template("raw_schema.yml.j2").render(ctx),
+        f"{contract.raw_model_name}.sql": env.get_template(
+            "raw.sql.j2"
+        ).render(ctx),
+        f"{contract.raw_model_name}.yml": env.get_template(
+            "raw_schema.yml.j2"
+        ).render(ctx),
     }, cols
 
 
@@ -192,10 +205,13 @@ def render_staging(
     if new_cols:
         logger.info(
             "Source has %d column(s) not yet in staging contract: %s",
-            len(new_cols), new_cols,
+            len(new_cols),
+            new_cols,
         )
 
-    raw_cols = _join_cols([c.source for c in contract.staging.columns], indent=8)
+    raw_cols = _join_cols(
+        [c.source for c in contract.staging.columns], indent=8
+    )
     transformed_cols = _join_cols(
         [_transform_expr(c) for c in contract.staging.columns],
         indent=4,
@@ -226,8 +242,12 @@ def render_staging(
         ),
     }
     return {
-        f"{contract.staging_model_name}.sql": env.get_template("staging.sql.j2").render(ctx),
-        f"{contract.staging_model_name}.yml": env.get_template("staging_schema.yml.j2").render(ctx),
+        f"{contract.staging_model_name}.sql": env.get_template(
+            "staging.sql.j2"
+        ).render(ctx),
+        f"{contract.staging_model_name}.yml": env.get_template(
+            "staging_schema.yml.j2"
+        ).render(ctx),
     }, new_cols
 
 
@@ -277,12 +297,15 @@ def _render_dbt_config(
     return "{{ config(\n" + body + "\n) }}"
 
 
-def _render_incremental_filter(loaded_at_field: str, upstream_loaded_at_field: str) -> str:
+def _render_incremental_filter(
+    loaded_at_field: str, upstream_loaded_at_field: str
+) -> str:
     """Render the {% if is_incremental() %} block that filters by loaded_at.
 
     upstream_loaded_at_field is the column name in this model's *upstream*
     (for raw: source column; for staging: raw column == source column).
-    loaded_at_field is the column name in *this* model (used in select max(...)).
+    loaded_at_field is the column name in *this* model
+    (used in select max(...)).
     """
     return (
         "    {%- if is_incremental() %}\n"
@@ -298,7 +321,9 @@ def _render_incremental_filter(loaded_at_field: str, upstream_loaded_at_field: s
 class GenerationResult:
     written: list[Path]
     new_source_columns: list[str] = dc_field(default_factory=list)
-    introspected_columns: list[IntrospectedColumn] = dc_field(default_factory=list)
+    introspected_columns: list[IntrospectedColumn] = dc_field(
+        default_factory=list
+    )
 
 
 def generate(
@@ -308,13 +333,17 @@ def generate(
     layer: Layer,
     contract_path: str = "contract.yml",
     dry_run: bool = False,
-) -> "GenerationResult":
+) -> GenerationResult:
     """Render artefacts for one layer."""
     if layer == Layer.RAW:
-        artefacts, introspected = render_raw(contract, introspector, contract_path)
+        artefacts, introspected = render_raw(
+            contract, introspector, contract_path
+        )
         new_cols: list[str] = []
     elif layer == Layer.STAGING:
-        artefacts, new_cols = render_staging(contract, introspector, contract_path)
+        artefacts, new_cols = render_staging(
+            contract, introspector, contract_path
+        )
         introspected = []
     else:
         raise GenerationError(f"Unknown layer: {layer}")

@@ -10,6 +10,7 @@ Handles BigQuery type quirks:
 - RECORD type is rendered as STRUCT (best-effort; nested fields are flattened
   in the description for now)
 """
+
 from __future__ import annotations
 
 import logging
@@ -24,10 +25,12 @@ class IntrospectedColumn:
     """A column as described by the warehouse."""
 
     name: str
-    field_type: str                          # BQ type: STRING, INT64, NUMERIC, TIMESTAMP, RECORD, etc.
-    mode: str = "NULLABLE"                   # NULLABLE | REQUIRED | REPEATED
+    field_type: str  # BQ type: STRING, INT64, NUMERIC, TIMESTAMP, RECORD, etc.
+    mode: str = "NULLABLE"  # NULLABLE | REQUIRED | REPEATED
     description: str = ""
-    fields: tuple = field(default_factory=tuple)  # For RECORD types: nested columns
+    fields: tuple = field(
+        default_factory=tuple
+    )  # For RECORD types: nested columns
 
     @property
     def dbt_data_type(self) -> str:
@@ -41,7 +44,7 @@ class IntrospectedColumn:
 
 
 class IntrospectionError(RuntimeError):
-    """Raised when the warehouse cannot be queried or the target does not exist."""
+    """Raised when the warehouse cannot be queried or target does not exist."""
 
 
 class Introspector(Protocol):
@@ -89,7 +92,8 @@ class BigQueryIntrospector:
         except Exception as e:
             raise IntrospectionError(
                 f"Failed to fetch table {fqn}. "
-                f"Check the table exists and credentials have bigquery.tables.get on it. "
+                "Check the table exists and credentials"
+                " have bigquery.tables.get on it. "
                 f"Underlying: {type(e).__name__}: {e}"
             ) from e
 
@@ -113,7 +117,9 @@ def _field_to_column(f) -> IntrospectedColumn:
 class FakeIntrospector:
     """For tests and offline development. Pre-populated with schemas."""
 
-    def __init__(self, schemas: dict[tuple[str, str, str], list[IntrospectedColumn]]):
+    def __init__(
+        self, schemas: dict[tuple[str, str, str], list[IntrospectedColumn]]
+    ):
         self._schemas = schemas
 
     def get_columns(
