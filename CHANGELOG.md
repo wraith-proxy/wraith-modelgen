@@ -90,3 +90,13 @@ First proper release. Not backwards compatible with any pre-release state.
 ## [0.0.1] - 2026-05-16
 
 Initial commit. Ghost Stack project scaffold. Nothing generated yet.
+
+## v0.5.0 (2026-05-17)
+
+## v0.4.0 (2026-05-16)
+
+## v0.3.0 (2026-05-16)
+
+## v0.2.0 (2026-05-16)
+
+## v0.1.0 (2026-05-16)
