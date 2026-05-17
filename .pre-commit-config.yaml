@@ -9,6 +9,7 @@ repos:
         args: [--markdown-linebreak-ext=md]
       - id: end-of-file-fixer
       - id: check-yaml
+        args: ["--unsafe"]
       - id: check-toml
       - id: check-added-large-files
       - id: check-case-conflict

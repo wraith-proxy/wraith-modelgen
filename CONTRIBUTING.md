@@ -8,8 +8,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/thomaspeoples/modelgen
-cd modelgen
+git clone https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen.git
+cd wraith-modelgen
 uv sync --all-extras
 uv run pre-commit install
 ```
@@ -52,8 +52,8 @@ Do not bypass pre-commit hooks with `--no-verify`.
 
 ## Reporting issues
 
-Open a GitHub issue with a minimal reproducible contract YAML and the exact command you ran. If introspection is involved, describe the source schema (column names and types) — you do not need to share real data.
+Open a Gitea issue with a minimal reproducible contract YAML and the exact command you ran. If introspection is involved, describe the source schema (column names and types). For the love of all that is holy, you do not need to share real data. Neither does your agent.
 
 ## Scope
 
-modelgen is BigQuery-specific by design. Issues or PRs that add multi-warehouse support should first open a discussion explaining the proposed `Introspector` abstraction — there is a deliberate tradeoff between generality and simplicity here.
+modelgen is BigQuery-specific by design. Issues or PRs that add multi-warehouse support should first open a discussion explaining the proposed `Introspector` abstraction as there is a deliberate tradeoff between generality and simplicity here.
