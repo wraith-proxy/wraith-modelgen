@@ -67,7 +67,7 @@ classDiagram
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `name` | string | yes | Event name — used in model filenames (`raw__<name>`, `stg__<name>`) |
+| `name` | string | yes | Event name, used in model filenames (`raw__<name>`, `stg__<name>`) |
 | `description` | string | no | Human-readable description |
 | `unique_key` | string or list | yes | Source column(s) that uniquely identify a row |
 | `loaded_at_field` | string | yes | Source timestamp column used for incremental filtering |
@@ -99,7 +99,7 @@ classDiagram
 |---|---|---|
 | `dataset` | `staging` | Target dataset |
 | `incremental_strategy` | `merge` | dbt incremental strategy |
-| `partition_by` | none | Partition config: `field`, `data_type`, `granularity` — uses staging-side names |
+| `partition_by` | none | Partition config using staging-side column names: `field`, `data_type`, `granularity` |
 | `cluster_by` | `[]` | Cluster columns (staging-side names) |
 | `columns` | `[]` | Declared columns (see below). Empty list = raw-only contract. |
 
@@ -109,7 +109,7 @@ classDiagram
 |---|---|---|
 | `source` | yes | Column name in raw / source schema |
 | `name` | no | Column name in staging (defaults to `source.lower()`) |
-| `type` | no | BigQuery type for `CAST` — e.g. `STRING`, `TIMESTAMP`, `INT64` |
+| `type` | no | BigQuery target type for `CAST`, e.g. `STRING`, `TIMESTAMP`, `INT64` |
 | `description` | no | Column description (written to `.yml`) |
 | `tests` | no | dbt tests: `not_null`, `unique`, `accepted_values`, etc. |
 
@@ -146,7 +146,7 @@ from deduped
 where _row_num = 1
 ```
 
-Raw uses source-side column names throughout. `select *` — whatever the source has, raw has.
+Raw uses source-side column names throughout. `select *` passthrough: whatever is in the source table is in raw.
 
 ### `raw__<name>.yml`
 

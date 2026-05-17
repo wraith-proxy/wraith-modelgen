@@ -11,7 +11,7 @@
 
 Source schemas change. Columns get renamed. Types get tightened. New fields appear without ceremony. In most analytics codebases this is a downstream catastrophe: dashboards break, FDPs fail, the analytics team gets paged at 03:00, and someone files a ticket asking whether dbt itself is broken.
 
-wraith-modelgen makes the data contract the change-management mechanism. The source team updates it as part of their release. wraith-modelgen regenerates the models. Downstream sees what it sees. Nothing breaks unless something it actually depended on disappeared — at which point you want to know.
+wraith-modelgen makes the data contract the change-management mechanism. The source team updates it as part of their release. wraith-modelgen regenerates the models. Downstream sees what it sees. Nothing breaks unless something it actually depended on disappears, which triggers a generation failure with the column name.
 
 ---
 
@@ -105,12 +105,12 @@ Validation runs as part of `modelgen gen --staging`. If it passes, the generated
 ## 🏗️ What gets generated
 
 **For `--raw`:**
-- `raw__event.sql` — dbt incremental model with `{{ source(...) }}`, optional dedup window, partition and cluster config.
-- `raw__event.yml` — dbt sources entry plus model definition. Columns mirror the introspected source schema.
+- `raw__event.sql`: dbt incremental model with `{{ source(...) }}`, optional dedup window, partition and cluster config.
+- `raw__event.yml`: dbt sources entry plus model definition. Columns mirror the introspected source schema.
 
 **For `--staging`:**
-- `stg__event.sql` — dbt incremental model with `{{ ref('raw__event') }}`. Casts and renames applied.
-- `stg__event.yml` — model definition with column tests from the contract.
+- `stg__event.sql`: dbt incremental model with `{{ ref('raw__event') }}`. Casts and renames applied.
+- `stg__event.yml`: model definition with column tests from the contract.
 
 ---
 

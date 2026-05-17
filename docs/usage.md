@@ -18,7 +18,7 @@ flowchart LR
     H --> D
 ```
 
-Or, if you've set up `.modelgen.yml`, skip the per-layer invocations entirely:
+Or, if you have `.modelgen.yml` set up, skip the per-layer invocations:
 
 ```bash
 modelgen run
@@ -30,19 +30,19 @@ modelgen run
 
 ### `modelgen validate`
 
-Offline contract validation. No BigQuery credentials, no network, no excuses.
+Offline contract validation. No BigQuery credentials or network access needed.
 
 ```bash
 modelgen validate contract.yml
 ```
 
-Fix the contract before it costs you a BigQuery introspection call.
+Run this before `gen` to catch YAML errors without a round-trip to BigQuery.
 
 ---
 
 ### `modelgen gen`
 
-Generate a single layer from a contract. Pick one.
+Generate a single layer from a contract. Specify one of `--raw` or `--staging`.
 
 ```bash
 modelgen gen CONTRACT [OPTIONS]
@@ -56,7 +56,7 @@ modelgen gen CONTRACT [OPTIONS]
 | `--dry-run` | Preview without writing |
 | `-v`, `--verbose` | Debug logging |
 
-Exactly one of `--raw` or `--staging`. Not both. Not neither.
+Exactly one of `--raw` or `--staging` is required.
 
 **Examples:**
 
@@ -70,7 +70,7 @@ modelgen gen contract.yml --staging -o ./models/staging
 # Preview what would be written
 modelgen gen contract.yml --raw --dry-run
 
-# Noisy mode
+# Verbose output
 modelgen gen contract.yml --staging --verbose
 ```
 
@@ -78,7 +78,7 @@ modelgen gen contract.yml --staging --verbose
 
 ### `modelgen run`
 
-Sweep the whole repo. Find every contract. Generate every layer. Do it in one command.
+Find all contracts and regenerate every layer in one command.
 
 ```bash
 modelgen run [OPTIONS]
@@ -98,7 +98,7 @@ raw_output: models/raw
 staging_output: models/staging
 ```
 
-If `.modelgen.yml` doesn't exist, opinionated defaults apply:
+If `.modelgen.yml` is not found, these defaults apply:
 
 | Setting | Default |
 |---|---|
@@ -106,9 +106,9 @@ If `.modelgen.yml` doesn't exist, opinionated defaults apply:
 | `raw_output` | `models/raw` |
 | `staging_output` | `models/staging` |
 
-Staging generation is skipped for any contract that declares zero staging columns — raw-only contracts are a valid use case.
+Staging generation is skipped for contracts with no columns declared; raw-only contracts are supported.
 
-**Example:**
+**Examples:**
 
 ```bash
 # Generate everything
@@ -117,7 +117,7 @@ modelgen run
 # With explicit config
 modelgen run --config path/to/.modelgen.yml
 
-# See what would happen
+# Preview output
 modelgen run --dry-run
 ```
 
@@ -131,14 +131,14 @@ A fully-annotated example: [`example_contract.yml`](https://git.thomaspeoples.co
 
 ## Schema evolution
 
-Source schemas change. That's their job. wraith-modelgen's job is making sure that's not your problem.
+Source schemas change. wraith-modelgen validates the boundary and reports what broke.
 
 | Scenario | Behaviour |
 |---|---|
-| New column added to source | Flows through raw automatically (`select *`). Invisible in staging until you add it to the contract. |
-| Source column renamed | Validation fails: column not found in source. Update `unique_key` (if applicable) and the staging `source:` field. Staging name stays stable downstream. |
-| Source column retyped | Update staging `type:`. The `CAST` absorbs it. If values are incompatible, BigQuery will tell you at query time — not silently. |
-| Source column dropped | Generation fails loudly if staging still references it. Fix the contract or fix the source. |
+| New column added to source | Flows through raw automatically (`select *`). Invisible in staging until added to the contract. |
+| Source column renamed | Update `unique_key` (if applicable) and the staging `source:` field. Staging name stays stable downstream. |
+| Source column retyped | Update staging `type:`. The `CAST` absorbs it. If values are incompatible, BigQuery will fail at query time. |
+| Source column dropped | Generation fails if staging still references it. Update the contract or restore the source column. |
 
-!!! tip "The golden rule"
-    Raw absorbs source drift. Staging absorbs raw drift. Downstream consumers are insulated from both.
+!!! tip "The layering principle"
+    Raw absorbs source drift. Staging absorbs raw drift. Downstream consumers see a stable interface.

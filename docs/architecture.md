@@ -1,6 +1,6 @@
 # 👻 Architecture
 
-wraith-modelgen is a pipeline: contract in, sovereign dbt models out. Two layers. One direction. No feedback loops, no hidden state, no surprises at 3am.
+wraith-modelgen is a pipeline: contract in, dbt models out. Two layers. One direction.
 
 ---
 
@@ -15,13 +15,13 @@ flowchart TD
     E --> F["raw__event.sql\nraw__event.yml"]
     E --> G["stg__event.sql\nstg__event.yml"]
 
-    subgraph contract.py ["contract.py — parse + validate"]
+    subgraph contract.py ["contract.py: parse + validate"]
         B
     end
-    subgraph introspect.py ["introspect.py — live schema from BQ"]
+    subgraph introspect.py ["introspect.py: live schema from BQ"]
         C
     end
-    subgraph generator.py ["generator.py — Jinja2 rendering + file write"]
+    subgraph generator.py ["generator.py: Jinja2 rendering + file write"]
         D
         E
     end
@@ -31,36 +31,36 @@ flowchart TD
 
 ## Two-layer model
 
-The layers have different owners and different jobs. Conflating them is how you end up with a 3am page.
+The layers have different owners and different jobs.
 
 ```mermaid
 flowchart LR
-    SRC[("BigQuery\nsource table")] -->|"select *"| RAW["raw__event\n──────────────\nOrigin Data Product\nowned by source team"]
-    RAW -->|"{{ ref(...) }}"| STG["stg__event\n──────────────\nConsumption Data Product\nowned by analytics"]
+    SRC[("BigQuery\nsource table")] -->|"select *"| RAW["raw__event\nOrigin Data Product\nowned by source team"]
+    RAW -->|"{{ ref(...) }}"| STG["stg__event\nConsumption Data Product\nowned by analytics"]
     STG --> DOWN["Downstream\nconsumers"]
 
     CTR["📄 contract.yml"] -. "introspects schema\nat gen time" .-> SRC
     CTR -. "declares columns,\ncasts, renames" .-> STG
 ```
 
-**Raw** is a `select *` pass-through. It mirrors the source schema exactly. New source columns flow in automatically. The source team can add columns without telling anyone.
+**Raw** is a `select *` pass-through. It mirrors the source schema exactly. New source columns flow in automatically. The source team can add columns without coordinating with analytics.
 
-**Staging** is the consumer contract. Explicit column selection, renames, and casts. Schema drift is absorbed here — downstream consumers never see source column names, only the stable contract names.
+**Staging** is the consumer contract. Explicit column selection, renames, and casts. Schema drift is absorbed here; downstream consumers only see the stable contract names.
 
 ---
 
 ## Schema evolution
 
-Source schemas change. This is not a problem wraith-modelgen solves — it's a problem wraith-modelgen makes visible before it becomes your problem.
+wraith-modelgen surfaces schema changes at generation time, before they affect production.
 
 ```mermaid
 flowchart TD
     GEN["modelgen gen --staging"] --> VAL["Validate: all staging contract columns\npresent in source schema?"]
     VAL -->|"yes"| RENDER["Render staging model\ncast + rename all declared columns"]
-    VAL -->|"no — column missing"| FAIL["❌ GenerationError\n'column X not found in source'\nFix the contract or fix the source"]
+    VAL -->|"no: column missing"| FAIL["GenerationError\n'column X not found in source'\nUpdate the contract or restore the source column"]
     RENDER --> NOTIFY{"New source columns\nnot in staging contract?"}
-    NOTIFY -->|"yes"| WARN["⚠ Schema evolution notice\ncolumn names printed to output\nnot a failure — raw absorbs them"]
-    NOTIFY -->|"no"| DONE["✅ Files written"]
+    NOTIFY -->|"yes"| WARN["Schema evolution notice\ncolumn names printed to output\nnot a failure; raw absorbs them"]
+    NOTIFY -->|"no"| DONE["Files written"]
     WARN --> DONE
 ```
 
@@ -77,10 +77,10 @@ flowchart TD
 
 | Module | Responsibility |
 |---|---|
-| `contract.py` | YAML parsing, dataclasses, validation. The contract is law. |
+| `contract.py` | YAML parsing, dataclasses, validation. |
 | `introspect.py` | BigQuery schema fetch. `FakeIntrospector` for tests and offline use. |
 | `generator.py` | Jinja2 rendering, file writing, schema evolution logic. |
-| `cli.py` | Typer commands, Rich output, error handling. The face. |
+| `cli.py` | Typer commands, Rich output, error handling. |
 | `src/templates/` | Jinja2 templates for the four generated artefacts. |
 
 ---
@@ -89,8 +89,8 @@ flowchart TD
 
 **Deterministic output.** Same contract + same source schema = byte-identical files. CI can diff generated output against committed output to catch contract drift without running a BigQuery query.
 
-**Introspection at gen time, not contract time.** The contract only declares what the consumer cares about. Raw column metadata comes from the live source schema. The warehouse is the source of truth for column names and types — the contract never needs to duplicate that.
+**Introspection at gen time, not contract time.** The contract only declares what the consumer cares about. Raw column metadata comes from the live source schema. The warehouse is the source of truth for column names and types; the contract never duplicates them.
 
-**Strict failure on missing columns.** No silent passes. If the contract references a column the source no longer has, generation fails with the column name. A failed build is better than a broken pipeline nobody noticed.
+**Strict failure on missing columns.** If the contract references a column the source no longer has, generation fails with the column name. A failed build is better than a broken pipeline that nobody noticed.
 
-**BigQuery only, by design.** The introspection module is BQ-native. Not a limitation — a choice. Generic warehouse support adds complexity for no benefit in this stack. Add a different `Introspector` implementation if you need another warehouse.
+**BigQuery only, by design.** The introspection module is BQ-native. Generic warehouse support adds complexity for no benefit in this stack. Add a different `Introspector` implementation if you need another warehouse.

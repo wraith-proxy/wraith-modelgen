@@ -12,10 +12,10 @@
 
 Given a YAML data contract describing a BigQuery source table, `wraith-modelgen` generates:
 
-- **Raw model** (`raw__<event>.sql` + `.yml`) — a pass-through incremental model with optional dedup via `row_number()`. Schema mirrors source; new columns flow through automatically.
-- **Staging model** (`stg__<event>.sql` + `.yml`) — a consumer-facing contract with explicit column selection, renames, and casts. Absorbs upstream schema drift so downstream never sees it.
+- **Raw model** (`raw__<event>.sql` + `.yml`): pass-through incremental model with optional dedup via `row_number()`. Schema mirrors source; new columns flow through automatically.
+- **Staging model** (`stg__<event>.sql` + `.yml`): consumer-facing contract with explicit column selection, renames, and casts. Absorbs upstream schema drift so downstream never sees it.
 
-Source schema changes are the source team's problem. Not yours.
+Source schema changes are handled at the raw/staging boundary, not in your downstream models.
 
 ## Install
 

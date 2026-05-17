@@ -44,7 +44,7 @@ flowchart LR
 
 ## Contract files
 
-Contract YAML files contain GCP project IDs, dataset names, and table names. They are infrastructure config — version-control them, but do not store credentials in them.
+Contract YAML files contain GCP project IDs, dataset names, and table names. Version-control them like any infrastructure config, but keep credentials out of them.
 
 The pre-commit configuration includes `detect-secrets` to block accidental credential commits. If it flags a false positive, update `.secrets.baseline` rather than disabling the hook.
 
