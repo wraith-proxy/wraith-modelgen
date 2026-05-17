@@ -27,6 +27,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Rich panels upgraded with subtitles and aligned keys. `⚠` added to schema evolution warnings.
 - Error messages include remediation hints.
 - `.pre-commit-config.yaml`: `check-yaml` gets `--unsafe` flag to allow `!!python/name:` Python YAML tags in `mkdocs.yml`.
+- All em-dashes replaced with standard punctuation throughout docs, CLI, and CHANGELOG. Contrarian and AI-pattern phrasing removed from help text, docstrings, and prose.
 
 ---
 
