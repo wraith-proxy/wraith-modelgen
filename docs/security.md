@@ -1,23 +1,55 @@
 # 👻 Security Statement
 
-## Credentials
+wraith-modelgen reads schema metadata. It does not read your data.
 
-wraith-modelgen uses Google Application Default Credentials (ADC) to connect to BigQuery. It never stores, logs, or transmits credentials. The credential resolution order is:
+---
 
-1. `GOOGLE_APPLICATION_CREDENTIALS` env var (service account key file)
-2. `gcloud auth application-default login` (user credentials)
-3. Workload Identity / GCE metadata server (when running on GCP)
+## Credential resolution
 
-The minimum BigQuery permission required is `bigquery.tables.get` on the source table.
+wraith-modelgen uses Google Application Default Credentials (ADC). It never stores, logs, or transmits credentials.
 
-## No data access
+```mermaid
+flowchart TD
+    A["modelgen gen invoked"] --> B{"GOOGLE_APPLICATION_CREDENTIALS\nenv var set?"}
+    B -->|yes| C["Service account key file"]
+    B -->|no| D{"gcloud ADC available?\ngcloud auth application-default login"}
+    D -->|yes| E["User credentials"]
+    D -->|no| F{"Running on GCP?\nCompute Engine, Cloud Run, GKE, etc."}
+    F -->|yes| G["Workload Identity\nor metadata server"]
+    F -->|no| H["❌ Authentication failed\nRun: gcloud auth application-default login"]
 
-wraith-modelgen only reads table **schema metadata** (column names and types). It never reads row data from your BigQuery tables.
+    C --> Z["BigQuery API call\nbigquery.tables.get only"]
+    E --> Z
+    G --> Z
+```
+
+The minimum permission required: **`bigquery.tables.get`** on the source table. Nothing else.
+
+---
+
+## What wraith-modelgen reads
+
+Only schema metadata: column names, types, and modes. No row data, ever.
+
+```mermaid
+flowchart LR
+    MG["wraith-modelgen"] -->|"tables.get\nschema metadata only"| BQ["BigQuery\nsource table"]
+    MG -->|"reads"| CTR["contract.yml\nlocal filesystem"]
+    MG -->|"writes"| OUT["generated .sql\nand .yml files\nlocal filesystem"]
+
+    ROWS["Row data\n(your actual data)"] -.->|"❌ never accessed"| MG
+```
+
+---
 
 ## Contract files
 
-Contract YAML files may contain GCP project IDs and dataset/table names. Treat them as you would any infrastructure configuration — they should be version-controlled but not contain credentials.
+Contract YAML files contain GCP project IDs, dataset names, and table names. They are infrastructure config — version-control them, but do not store credentials in them.
 
-## Secrets detection
+The pre-commit configuration includes `detect-secrets` to block accidental credential commits. If it flags a false positive, update `.secrets.baseline` rather than disabling the hook.
 
-The pre-commit config includes `detect-secrets` to prevent accidental credential commits.
+---
+
+## Reporting vulnerabilities
+
+Found something? Report it privately via the [Gitea security advisory](https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/issues) or email `hello@thomaspeoples.com`. Please don't open a public issue for a security vulnerability.

@@ -17,8 +17,10 @@ from modelgen.introspect import IntrospectionError
 app = typer.Typer(
     name="modelgen",
     help=(
-        "BigQuery dbt model scaffolder. Generates one layer"
-        " at a time from a YAML data contract."
+        "[bold cyan]👻[/bold cyan] Feed it a YAML data contract."
+        " Get back sovereign dbt models that won't ghost you at 3am.\n\n"
+        "One layer per run. No hand-holding. BigQuery introspected."
+        " Drift-proof by design."
     ),
     no_args_is_help=True,
     rich_markup_mode="rich",
@@ -28,7 +30,9 @@ console = Console()
 
 def _version_callback(value: bool) -> None:
     if value:
-        console.print(f"modelgen {__version__}")
+        console.print(
+            f"[bold cyan]👻[/bold cyan] modelgen [white]{__version__}[/white]"
+        )
         raise typer.Exit()
 
 
@@ -64,45 +68,56 @@ def _configure_logging(verbose: bool) -> None:
 def gen(
     contract: Path = typer.Argument(
         ...,
-        help="Path to the YAML data contract file.",
+        help="Path to the YAML data contract. The contract is law.",
         exists=True,
         readable=True,
     ),
     raw: bool = typer.Option(
-        False, "--raw", help="Generate the raw (Origin Data Product) layer."
+        False,
+        "--raw",
+        help="Generate the raw (Origin Data Product) layer."
+        " Everything in, nothing filtered.",
     ),
     staging: bool = typer.Option(
         False,
         "--staging",
-        help="Generate the staging (Consumption Data Product) layer.",
+        help="Generate the staging (Consumption Data Product) layer."
+        " Source schema drama stays upstream.",
     ),
     output: Path = typer.Option(
         Path("./models"),
         "--output",
         "-o",
-        help="Directory to write generated files into.",
+        help="Directory to write generated files into. Default: ./models.",
     ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
-        help="Print what would be generated without writing.",
+        help="Preview without writing. Commitment issues? Understandable.",
     ),
     verbose: bool = typer.Option(
-        False, "--verbose", "-v", help="Enable debug logging."
+        False, "--verbose", "-v", help="Log everything. For the anxious."
     ),
 ):
     """
     Generate a dbt model layer from a YAML data contract.
 
+    Pick a lane: [bold]--raw[/bold] or [bold]--staging[/bold].
+    One layer per run. That's the deal.
+
     \b
     Examples:
         modelgen gen contract.yml --raw -o ./models/raw
         modelgen gen contract.yml --staging -o ./models/staging
+        modelgen gen contract.yml --raw --dry-run
     """
     _configure_logging(verbose)
 
     if raw == staging:
-        console.print("[red]Specify exactly one of --raw or --staging.[/red]")
+        console.print(
+            "[red]Pick a lane.[/red]"
+            " [dim]--raw or --staging. One. Never both, never neither.[/dim]"
+        )
         raise typer.Exit(2)
 
     layer = Layer.RAW if raw else Layer.STAGING
@@ -128,13 +143,14 @@ def gen(
 
     console.print(
         Panel(
-            f"[bold]Event:[/bold] {event.name}\n"
-            f"[bold]Layer:[/bold] {layer.value}\n"
-            f"[bold]Source:[/bold] {event.source.fqn}\n"
-            f"[bold]Target:[/bold] {target_dataset}.{target_model}\n"
-            f"[bold]Unique key:[/bold] {', '.join(event.unique_key)} | "
-            f"[bold]Loaded at:[/bold] {event.loaded_at_field}",
-            title="[bold green]modelgen[/bold green]",
+            f"[bold]Event:[/bold]      {event.name}\n"
+            f"[bold]Layer:[/bold]      {layer.value}\n"
+            f"[bold]Source:[/bold]     {event.source.fqn}\n"
+            f"[bold]Target:[/bold]     {target_dataset}.{target_model}\n"
+            f"[bold]Unique key:[/bold] {', '.join(event.unique_key)}"
+            f"  [bold]Loaded at:[/bold] {event.loaded_at_field}",
+            title="[bold green]👻 modelgen[/bold green]",
+            subtitle="[dim]introspecting BigQuery…[/dim]",
             expand=False,
         )
     )
@@ -150,9 +166,16 @@ def gen(
         )
     except (GenerationError, IntrospectionError) as e:
         console.print(f"[red]Generation failed:[/red] {e}")
+        console.print(
+            "[dim]Fix the contract or the source. Then try again.[/dim]"
+        )
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]Unexpected error:[/red] {type(e).__name__}: {e}")
+        console.print(
+            "[dim]That one's on us."
+            " Run with --verbose and file a report.[/dim]"
+        )
         if verbose:
             console.print_exception()
         raise typer.Exit(1)
@@ -170,13 +193,12 @@ def gen(
     if result.new_source_columns:
         console.print(
             Panel(
-                f"Source has {len(result.new_source_columns)} column(s)"
-                " not yet in the staging contract:\n"
-                f"  {', '.join(result.new_source_columns)}\n\n"
-                "[dim]These flow through raw automatically. "
-                "Add to the staging contract when "
-                "downstream consumers need them.[/dim]",
-                title="[yellow]Schema evolution detected[/yellow]",
+                f"[bold]{len(result.new_source_columns)} new source column(s)"
+                " not yet in staging:[/bold]\n"
+                f"  [cyan]{', '.join(result.new_source_columns)}[/cyan]\n\n"
+                "[dim]Flowing through raw untouched. Source schema drama,"
+                " not yours. Add to staging when consumers need it.[/dim]",
+                title="[yellow]⚠ Schema evolution detected[/yellow]",
                 border_style="yellow",
             )
         )
@@ -186,19 +208,25 @@ def gen(
 def validate(
     contract: Path = typer.Argument(
         ...,
-        help="Path to the YAML data contract file.",
+        help="Path to the YAML data contract. No BigQuery. No mercy.",
         exists=True,
         readable=True,
     ),
 ):
-    """Validate a contract's YAML structure (does not introspect BigQuery)."""
+    """
+    Interrogate a contract's YAML structure.
+
+    No BigQuery credentials required. No tolerance for malformed YAML either.
+    Fast, offline, brutal — fix the contract before it fixes you.
+    """
     try:
         event = EventContract.from_file(contract)
         console.print(
-            f"[green]OK[/green] Contract valid: [bold]{event.name}[/bold]\n"
-            f"  Source: {event.source.fqn}\n"
-            f"  Unique key: {', '.join(event.unique_key)}\n"
-            f"  Staging columns declared: {len(event.staging.columns)}"
+            f"[green]OK[/green] [bold]{event.name}[/bold] is not broken."
+            f" Today.\n"
+            f"  Source:   {event.source.fqn}\n"
+            f"  Key:      {', '.join(event.unique_key)}\n"
+            f"  Columns:  {len(event.staging.columns)} staging declared"
         )
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
@@ -226,7 +254,11 @@ def run(
     ),
 ):
     """
-    Discover all contracts in the repo and generate dbt models for every layer.
+    Sweep the repo. Generate everything. Touch grass afterward.
+
+    Finds every contract, introspects BigQuery for each, and writes both
+    layers without asking you to hold its hand. If something's broken,
+    it tells you — loudly, and by name.
 
     \b
     Reads .modelgen.yml (or uses opinionated defaults) to find contracts
@@ -265,11 +297,12 @@ def run(
 
     console.print(
         Panel(
-            f"[bold]Contracts:[/bold] {len(contract_files)}\n"
-            f"[bold]Root:[/bold] {cfg.root}\n"
-            f"[bold]Raw output:[/bold] {cfg.raw_output}\n"
-            f"[bold]Staging output:[/bold] {cfg.staging_output}",
-            title="[bold green]modelgen run[/bold green]",
+            f"[bold]Contracts:[/bold]       {len(contract_files)}\n"
+            f"[bold]Root:[/bold]            {cfg.root}\n"
+            f"[bold]Raw output:[/bold]      {cfg.raw_output}\n"
+            f"[bold]Staging output:[/bold]  {cfg.staging_output}",
+            title="[bold green]👻 modelgen run[/bold green]",
+            subtitle="[dim]buckle up[/dim]",
             expand=False,
         )
     )
@@ -349,12 +382,12 @@ def run(
     for event_name, cols in new_cols_notices:
         console.print(
             Panel(
-                f"[bold]{event_name}[/bold]: {len(cols)} source"
-                " column(s) not yet in staging contract:\n"
-                f"  {', '.join(cols)}\n\n"
-                "[dim]These flow through raw automatically. "
-                "Add to staging when consumers need them.[/dim]",
-                title="[yellow]Schema evolution detected[/yellow]",
+                f"[bold]{event_name}[/bold]: {len(cols)} source column(s)"
+                " not yet in staging:\n"
+                f"  [cyan]{', '.join(cols)}[/cyan]\n\n"
+                "[dim]Flowing through raw untouched."
+                " Add to staging when consumers actually need it.[/dim]",
+                title="[yellow]⚠ Schema evolution detected[/yellow]",
                 border_style="yellow",
             )
         )

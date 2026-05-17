@@ -1,5 +1,9 @@
 # 👻 wraith-modelgen
 
+[![Documentation](https://img.shields.io/badge/docs-live-brightgreen)](https://www.thomaspeoples.com/gitea-repos/wraith-modelgen/)
+![PyPI - Version](https://img.shields.io/pypi/v/wraith-modelgen)
+![Coverage](https://www.thomaspeoples.com/gitea-repos/wraith-modelgen/coverage.svg)
+
 *BigQuery dbt model scaffolder for the Ghost Stack. One YAML contract, two sovereign data products.*
 
 ---

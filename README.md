@@ -2,6 +2,7 @@
 ![PyPI - Version](https://img.shields.io/pypi/v/wraith-modelgen)
 ![PyPI - License](https://img.shields.io/pypi/l/wraith-modelgen)
 ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/wraith-modelgen)
+![Coverage](https://www.thomaspeoples.com/gitea-repos/wraith-modelgen/coverage.svg)
 
 # 👻 wraith-modelgen
 ### *Sovereign dbt Scaffolding for the Ghost Stack*
