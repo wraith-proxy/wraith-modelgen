@@ -10,6 +10,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Coverage badge in `README.md` and `docs/index.md` — rendered from `docs/coverage.svg` via the pages CI pipeline.
+- `mkdocs.yml`: `pymdownx.superfences` with Mermaid custom fence, `admonition`, and `pymdownx.details` extensions enabled.
+- `docs/architecture.md`: Three Mermaid diagrams — generation pipeline (with module subgraphs), two-layer model (source→raw→staging→consumers), schema evolution decision tree. ASCII art removed.
+- `docs/usage.md`: Full workflow Mermaid flowchart. `modelgen run` command was entirely undocumented — added with options table, `.modelgen.yml` reference, and examples.
+- `docs/reference.md`: Contract structure `classDiagram`. Generated file sections expanded with real example SQL. Type mapping table for REPEATED/RECORD modes.
+- `docs/security.md`: Credential resolution replaced with Mermaid flowchart. Second diagram showing what wraith-modelgen touches vs. never touches (row data). Vulnerability reporting section added.
+- `CHANGELOG.md`: Reconstructed from git history — accurate per-version content, Ghost Stack voice, no duplicate stubs, no empty commitizen entries.
 
 ### Changed
 
@@ -20,6 +26,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Version output: `👻 modelgen 0.x.x`.
 - Rich panels upgraded with subtitles, aligned keys, and `⚠` on schema evolution warnings.
 - Error messages now include remediation hints instead of just failing silently.
+- `.pre-commit-config.yaml`: `check-yaml` gets `--unsafe` flag to allow `!!python/name:` Python YAML tags in `mkdocs.yml`.
 
 ---
 
