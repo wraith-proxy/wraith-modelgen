@@ -82,6 +82,10 @@ def patch_introspector(monkeypatch):
         "modelgen.introspect.BigQueryIntrospector",
         lambda: fake,
     )
+    monkeypatch.setattr(
+        "modelgen.introspect.has_default_credentials",
+        lambda: True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +212,66 @@ class TestGenCommand:
             app, ["gen", str(tmp_path / "nope.yml"), "--raw"]
         )
         assert result.exit_code != 0
+
+    def test_from_contract_flag_raw_exits_zero(self, contract_file, tmp_path):
+        result = runner.invoke(
+            app,
+            [
+                "gen",
+                str(contract_file),
+                "--raw",
+                "--from-contract",
+                "-o",
+                str(tmp_path),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_from_contract_flag_writes_files(self, contract_file, tmp_path):
+        runner.invoke(
+            app,
+            [
+                "gen",
+                str(contract_file),
+                "--raw",
+                "--from-contract",
+                "-o",
+                str(tmp_path),
+            ],
+        )
+        assert (tmp_path / "raw__user_signed_up.sql").exists()
+        assert (tmp_path / "raw__user_signed_up.yml").exists()
+
+    def test_from_contract_flag_staging_exits_zero(
+        self, contract_file, tmp_path
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "gen",
+                str(contract_file),
+                "--staging",
+                "--from-contract",
+                "-o",
+                str(tmp_path),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_auto_fallback_when_no_credentials(
+        self, contract_file, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "modelgen.introspect.has_default_credentials", lambda: False
+        )
+        result = runner.invoke(
+            app,
+            ["gen", str(contract_file), "--raw", "-o", str(tmp_path)],
+        )
+        assert result.exit_code == 0, result.output
+        output = strip_ansi(result.output)
+        assert "No GCP credentials" in output
+        assert (tmp_path / "raw__user_signed_up.sql").exists()
 
 
 # ---------------------------------------------------------------------------

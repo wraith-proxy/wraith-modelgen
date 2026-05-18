@@ -24,6 +24,7 @@ from modelgen.generator import (
     generate,
 )
 from modelgen.introspect import (
+    ContractIntrospector,
     FakeIntrospector,
     IntrospectedColumn,
     IntrospectionError,
@@ -221,10 +222,12 @@ class TestRawGeneration:
         sql = (tmp_path / "raw__user_signed_up.sql").read_text()
         assert "source('landing', 'user_signups_raw')" in sql
 
-    def test_sql_is_select_star(self, contract, introspector, tmp_path):
+    def test_sql_uses_explicit_columns(self, contract, introspector, tmp_path):
         generate(contract, introspector, tmp_path, Layer.RAW)
         sql = (tmp_path / "raw__user_signed_up.sql").read_text()
-        assert "select *" in sql
+        assert "select *" not in sql
+        assert "EVENT_ID" in sql
+        assert "USER_ID" in sql
         assert "cast(" not in sql
 
     def test_sql_has_dedup_block(self, contract, introspector, tmp_path):
@@ -291,7 +294,8 @@ class TestRawWithoutDedup:
         generate(contract, introspector, tmp_path, Layer.RAW)
         sql = (tmp_path / "raw__user_signed_up.sql").read_text()
         assert "row_number()" not in sql
-        assert "select * from source" in sql
+        assert "select *" not in sql
+        assert "EVENT_ID" in sql
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +398,7 @@ class TestStagingGeneration:
 
 class TestSchemaEvolution:
     def test_new_source_column_flows_through_raw(self, contract, tmp_path):
-        """A new column in source appears in raw automatically (select *)."""
+        """A new column in source appears in raw after regeneration."""
         introspector = FakeIntrospector(
             {
                 (
@@ -622,6 +626,57 @@ class TestModelgenConfig:
         assert cfg.contracts_glob == "contracts/*.yml"
         assert cfg.raw_output == tmp_path / "custom/raw"
         assert cfg.staging_output == tmp_path / "models/staging"
+
+
+class TestContractIntrospector:
+    def test_returns_staging_columns(self, contract):
+        intr = ContractIntrospector(contract)
+        cols = intr.get_columns(SOURCE_PROJECT, SOURCE_DATASET, SOURCE_TABLE)
+        names = {c.name for c in cols}
+        assert {
+            "EVENT_ID",
+            "USER_ID",
+            "SIGNUP_METHOD",
+            "RECEIVED_AT",
+        }.issubset(names)
+
+    def test_unique_key_always_present(self, contract):
+        intr = ContractIntrospector(contract)
+        cols = intr.get_columns(SOURCE_PROJECT, SOURCE_DATASET, SOURCE_TABLE)
+        names = {c.name for c in cols}
+        for k in contract.unique_key:
+            assert k in names
+
+    def test_loaded_at_always_present(self, contract):
+        intr = ContractIntrospector(contract)
+        cols = intr.get_columns(SOURCE_PROJECT, SOURCE_DATASET, SOURCE_TABLE)
+        names = {c.name for c in cols}
+        assert contract.loaded_at_field in names
+
+    def test_type_comes_from_staging(self, contract):
+        intr = ContractIntrospector(contract)
+        cols = intr.get_columns(SOURCE_PROJECT, SOURCE_DATASET, SOURCE_TABLE)
+        event_id = next(c for c in cols if c.name == "EVENT_ID")
+        assert event_id.field_type == "STRING"
+
+    def test_raw_generation_with_contract_introspector(
+        self, contract, tmp_path
+    ):
+        intr = ContractIntrospector(contract)
+        result = generate(contract, intr, tmp_path, Layer.RAW)
+        assert len(result.written) == 2
+        sql = (tmp_path / "raw__user_signed_up.sql").read_text()
+        assert "select *" not in sql
+        assert "EVENT_ID" in sql
+
+    def test_staging_generation_with_contract_introspector(
+        self, contract, tmp_path
+    ):
+        intr = ContractIntrospector(contract)
+        result = generate(contract, intr, tmp_path, Layer.STAGING)
+        assert len(result.written) == 2
+        sql = (tmp_path / "stg__user_signed_up.sql").read_text()
+        assert "cast(EVENT_ID as STRING) as event_id" in sql
 
 
 class TestDryRun:

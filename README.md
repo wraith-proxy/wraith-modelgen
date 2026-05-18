@@ -93,7 +93,7 @@ event:
 
 | Source change | What wraith-modelgen does | What you do |
 |---|---|---|
-| Adds a column | Flows into raw via `select *`. Invisible in staging. | Add it to staging when consumers need it. |
+| Adds a column | Does not appear until you regenerate (`modelgen run`). Invisible in staging until declared in the contract. | Regenerate, then add to staging when consumers need it. |
 | Renames a column | Validation fails: column not found in source. | Update the `source:` field on that column. Also `unique_key` / `loaded_at_field` if applicable. |
 | Retypes a column | Existing CAST in staging absorbs it (or fails loudly at query time if values are incompatible). | Update `type:` if the canonical type should change too. |
 | Drops a column staging uses | Validation fails: column not found. | Either restore upstream or remove from staging contract. |

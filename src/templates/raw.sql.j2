@@ -2,9 +2,8 @@
   {{ event.raw_model_name }}.sql
   Origin Data Product: landing -> raw
 
-  This file is generated. Columns are introspected at gen time; the model uses
-  select * so new source columns surface here automatically. Regenerate when
-  the contract changes.
+  This file is generated. Columns are introspected at gen time. Regenerate
+  when the source schema changes.
 
   Source: {{ event.source.project }}.{{ event.source.dataset }}.{{ event.source.table }}
   Contract: {{ contract_path }}
@@ -14,7 +13,8 @@
 
 with source as (
 
-    select *
+    select
+        {{ raw_source_cols }}
     from {{ "{{ source('" }}{{ event.source.dataset }}{{ "', '" }}{{ event.source.table }}{{ "') }}" }}
 
 {{ incremental_filter }}
@@ -24,7 +24,7 @@ with source as (
 deduplicated as (
 
     select
-        *,
+        {{ raw_dedup_cols }}
         row_number() over (
             partition by {{ event.unique_key | join(', ') }}
             order by {{ event.loaded_at_field }} desc
@@ -33,10 +33,13 @@ deduplicated as (
 
 )
 
-select * except(_modelgen_rn)
+select
+    {{ raw_final_cols }}
 from deduplicated
 where _modelgen_rn = 1
 {% else %}
 
-select * from source
+select
+    {{ raw_final_cols }}
+from source
 {% endif %}

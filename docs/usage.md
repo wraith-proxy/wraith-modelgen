@@ -55,6 +55,7 @@ modelgen gen CONTRACT [OPTIONS]
 | `-o`, `--output PATH` | Write files here (default: `./models`) |
 | `--dry-run` | Preview without writing |
 | `-v`, `--verbose` | Debug logging |
+| `--from-contract` | Skip BigQuery introspection (see below) |
 
 Exactly one of `--raw` or `--staging` is required.
 
@@ -72,6 +73,9 @@ modelgen gen contract.yml --raw --dry-run
 
 # Verbose output
 modelgen gen contract.yml --staging --verbose
+
+# Offline — no BigQuery connection needed
+modelgen gen contract.yml --raw --from-contract
 ```
 
 ---
@@ -89,6 +93,7 @@ modelgen run [OPTIONS]
 | `-c`, `--config PATH` | Path to `.modelgen.yml`. Auto-discovered upward from cwd if not given. |
 | `--dry-run` | Preview without writing |
 | `-v`, `--verbose` | Debug logging |
+| `--from-contract` | Skip BigQuery introspection for all contracts (see below) |
 
 **`.modelgen.yml` config:**
 
@@ -123,6 +128,37 @@ modelgen run --dry-run
 
 ---
 
+---
+
+## Offline / contract-only mode
+
+By default, `gen` and `run` introspect BigQuery at generation time to validate
+column references and populate the raw schema YAML. If no GCP Application
+Default Credentials are available, both commands automatically fall back to
+**contract-only mode** — no BigQuery connection is made.
+
+You can also force contract-only mode explicitly with `--from-contract`:
+
+```bash
+modelgen gen contract.yml --raw --from-contract
+modelgen run --from-contract
+```
+
+**What changes in contract-only mode:**
+
+| Behaviour | With BQ | `--from-contract` |
+|---|---|---|
+| Column list in `raw_schema.yml` | Full source schema | Contract staging columns + key fields only |
+| Schema drift detection | Yes — fails if staging refs missing column | Skipped |
+| New source column notices | Yes | Not reported (source not queried) |
+| BQ credentials required | Yes | No |
+
+Contract-only mode is useful for local development without a service account,
+CI pipelines without GCP access, and bootstrapping a new contract before the
+source table exists.
+
+---
+
 ## Contract file
 
 A fully-annotated example: [`example_contract.yml`](https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/src/branch/main/example_contract.yml).
@@ -135,10 +171,10 @@ Source schemas change. wraith-modelgen validates the boundary and reports what b
 
 | Scenario | Behaviour |
 |---|---|
-| New column added to source | Flows through raw automatically (`select *`). Invisible in staging until added to the contract. |
+| New column added to source | Does **not** appear until you regenerate. Run `modelgen run` (or `modelgen gen --raw`) to pick it up. Invisible in staging until added to the contract. |
 | Source column renamed | Update `unique_key` (if applicable) and the staging `source:` field. Staging name stays stable downstream. |
 | Source column retyped | Update staging `type:`. The `CAST` absorbs it. If values are incompatible, BigQuery will fail at query time. |
 | Source column dropped | Generation fails if staging still references it. Update the contract or restore the source column. |
 
 !!! tip "The layering principle"
-    Raw absorbs source drift. Staging absorbs raw drift. Downstream consumers see a stable interface.
+    Raw absorbs source drift on each regeneration — columns are explicit, introspected at gen time. Staging absorbs raw drift. Downstream consumers see a stable interface.

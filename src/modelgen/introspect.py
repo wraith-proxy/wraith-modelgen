@@ -114,6 +114,47 @@ def _field_to_column(f) -> IntrospectedColumn:
     )
 
 
+def has_default_credentials() -> bool:
+    """True if Application Default Credentials can be resolved."""
+    try:
+        import google.auth
+
+        google.auth.default()
+        return True
+    except Exception:
+        return False
+
+
+class ContractIntrospector:
+    """Derives column metadata from the contract when BQ is unavailable.
+
+    Column list comes from staging declarations plus unique_key and
+    loaded_at_field. Types come from the staging contract; unmapped
+    key columns default to STRING. Validations still run but pass
+    because the introspected set is built from the contract itself.
+    """
+
+    def __init__(self, contract) -> None:
+        self._contract = contract
+
+    def get_columns(
+        self, project: str, dataset: str, table: str
+    ) -> list[IntrospectedColumn]:
+        seen: dict[str, IntrospectedColumn] = {}
+        for col in self._contract.staging.columns:
+            seen[col.source] = IntrospectedColumn(
+                name=col.source,
+                field_type=col.type if col.type else "STRING",
+                description=col.description,
+            )
+        for name in list(self._contract.unique_key) + [
+            self._contract.loaded_at_field
+        ]:
+            if name not in seen:
+                seen[name] = IntrospectedColumn(name=name, field_type="STRING")
+        return list(seen.values())
+
+
 class FakeIntrospector:
     """For tests and offline development. Pre-populated with schemas."""
 

@@ -128,25 +128,42 @@ classDiagram
     cluster_by=[...]
 ) }}
 
--- Optional dedup CTE (when dedup: true)
-with deduped as (
-    select *,
-        row_number() over (
-            partition by EVENT_ID
-            order by RECEIVED_AT desc
-        ) as _row_num
+with source as (
+    select
+        EVENT_ID,
+        USER_ID,
+        RECEIVED_AT
+        -- ... all columns introspected at gen time
     from {{ source('landing', 'user_signups_raw') }}
     {% if is_incremental() %}
         where RECEIVED_AT > (select max(RECEIVED_AT) from {{ this }})
     {% endif %}
+),
+
+-- dedup CTE (when dedup: true)
+deduplicated as (
+    select
+        EVENT_ID,
+        USER_ID,
+        RECEIVED_AT,
+        -- ...
+        row_number() over (
+            partition by EVENT_ID
+            order by RECEIVED_AT desc
+        ) as _modelgen_rn
+    from source
 )
 
-select * except (_row_num)
-from deduped
-where _row_num = 1
+select
+    EVENT_ID,
+    USER_ID,
+    RECEIVED_AT
+    -- ...
+from deduplicated
+where _modelgen_rn = 1
 ```
 
-Raw uses source-side column names throughout. `select *` passthrough: whatever is in the source table is in raw.
+Raw uses source-side column names throughout. Columns are listed explicitly — introspected from BigQuery (or the contract in `--from-contract` mode) at generation time. Regenerate when the source schema changes.
 
 ### `raw__<name>.yml`
 
@@ -165,15 +182,20 @@ dbt `sources` entry (all introspected columns) + model definition.
 
 with source as (
     select
-        cast(EVENT_ID as STRING)   as event_id,
-        cast(RECEIVED_AT as TIMESTAMP) as received_at
+        EVENT_ID,
+        RECEIVED_AT
+        -- ... source-side names declared in contract
     from {{ ref('raw__user_signed_up') }}
     {% if is_incremental() %}
         where RECEIVED_AT > (select max(received_at) from {{ this }})
     {% endif %}
 )
 
-select * from source
+select
+    cast(EVENT_ID as STRING) as event_id,
+    cast(RECEIVED_AT as TIMESTAMP) as received_at
+    -- ...
+from source
 ```
 
 Staging uses staging-side names. Raw names never leak downstream.

@@ -99,7 +99,7 @@ def _new_source_columns(
     introspected: list[IntrospectedColumn],
 ) -> list[str]:
     """Source columns not yet in the staging contract. Informational only;
-    new columns flow through raw via select *."""
+    raw must be regenerated to include them."""
     declared = {c.source for c in contract.staging.columns}
     return [c.name for c in introspected if c.name not in declared]
 
@@ -150,11 +150,20 @@ def render_raw(
         )
     _validate_keys_present(contract, cols)
 
+    col_names = [c.name for c in cols]
+    i8 = "        "
+    raw_source_cols = _join_cols(col_names, indent=8)
+    raw_dedup_cols = f",\n{i8}".join(col_names) + ","
+    raw_final_cols = _join_cols(col_names, indent=4)
+
     env = _make_env()
     ctx = {
         "event": contract,
         "contract_path": contract_path,
         "introspected_columns": cols,
+        "raw_source_cols": raw_source_cols,
+        "raw_dedup_cols": raw_dedup_cols,
+        "raw_final_cols": raw_final_cols,
         "unique_key_dbt": contract.unique_key_dbt,
         "unique_key_yaml": _render_unique_key_yaml(contract.unique_key),
         "cluster_by_literal": _render_cluster_by(contract.raw.cluster_by),
