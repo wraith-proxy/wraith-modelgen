@@ -98,17 +98,31 @@ def gen(
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Log everything. For the anxious."
     ),
+    from_contract: bool = typer.Option(
+        False,
+        "--from-contract",
+        help=(
+            "Skip BigQuery introspection. Types and column list come"
+            " from the contract's staging declarations. Used when GCP"
+            " credentials are unavailable."
+        ),
+    ),
 ):
     """
     Generate a dbt model layer from a YAML data contract.
 
     Specify [bold]--raw[/bold] or [bold]--staging[/bold]. One layer per run.
 
+    Pass [bold]--from-contract[/bold] to skip BigQuery and generate from the
+    contract alone. This also happens automatically when no GCP Application
+    Default Credentials are found.
+
     \b
     Examples:
         modelgen gen contract.yml --raw -o ./models/raw
         modelgen gen contract.yml --staging -o ./models/staging
         modelgen gen contract.yml --raw --dry-run
+        modelgen gen contract.yml --raw --from-contract
     """
     _configure_logging(verbose)
 
@@ -124,9 +138,23 @@ def gen(
         console.print(f"[red]Invalid contract:[/red] {e}")
         raise typer.Exit(1)
 
-    from modelgen.introspect import BigQueryIntrospector
+    from modelgen.introspect import (
+        BigQueryIntrospector,
+        ContractIntrospector,
+        has_default_credentials,
+    )
 
-    introspector = BigQueryIntrospector()
+    if from_contract or not has_default_credentials():
+        if not from_contract:
+            console.print(
+                "[yellow]No GCP credentials found."
+                " Generating from contract only.[/yellow]"
+            )
+        introspector = ContractIntrospector(event)
+        mode_subtitle = "contract-only mode"
+    else:
+        introspector = BigQueryIntrospector()
+        mode_subtitle = "introspecting BigQuery…"
 
     target_dataset = (
         event.raw.dataset if layer == Layer.RAW else event.staging.dataset
@@ -146,7 +174,7 @@ def gen(
             f"[bold]Unique key:[/bold] {', '.join(event.unique_key)}"
             f"  [bold]Loaded at:[/bold] {event.loaded_at_field}",
             title="[bold green]👻 modelgen[/bold green]",
-            subtitle="[dim]introspecting BigQuery…[/dim]",
+            subtitle=f"[dim]{mode_subtitle}[/dim]",
             expand=False,
         )
     )
@@ -247,6 +275,14 @@ def run(
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Enable debug logging."
     ),
+    from_contract: bool = typer.Option(
+        False,
+        "--from-contract",
+        help=(
+            "Skip BigQuery introspection for all contracts. Types and"
+            " column list come from each contract's staging declarations."
+        ),
+    ),
 ):
     """
     Find all contracts and regenerate every layer.
@@ -270,7 +306,11 @@ def run(
     _configure_logging(verbose)
 
     from modelgen.config import ConfigError, ModelgenConfig
-    from modelgen.introspect import BigQueryIntrospector
+    from modelgen.introspect import (
+        BigQueryIntrospector,
+        ContractIntrospector,
+        has_default_credentials,
+    )
 
     try:
         if config is not None:
@@ -290,6 +330,16 @@ def run(
         )
         raise typer.Exit(0)
 
+    use_contract_introspection = from_contract or not has_default_credentials()
+    if use_contract_introspection and not from_contract:
+        console.print(
+            "[yellow]No GCP credentials found."
+            " Generating from contracts only.[/yellow]"
+        )
+
+    bq_subtitle = (
+        "contract-only mode" if use_contract_introspection else "buckle up"
+    )
     console.print(
         Panel(
             f"[bold]Contracts:[/bold]       {len(contract_files)}\n"
@@ -297,12 +347,15 @@ def run(
             f"[bold]Raw output:[/bold]      {cfg.raw_output}\n"
             f"[bold]Staging output:[/bold]  {cfg.staging_output}",
             title="[bold green]👻 modelgen run[/bold green]",
-            subtitle="[dim]buckle up[/dim]",
+            subtitle=f"[dim]{bq_subtitle}[/dim]",
             expand=False,
         )
     )
 
-    introspector = BigQueryIntrospector()
+    if not use_contract_introspection:
+        shared_introspector = BigQueryIntrospector()
+    else:
+        shared_introspector = None
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Contract")
@@ -319,6 +372,13 @@ def run(
         except ContractError as e:
             errors.append((contract_path.name, "parse", str(e)))
             continue
+
+        introspector = (
+            ContractIntrospector(event)
+            if use_contract_introspection
+            else shared_introspector
+        )
+        assert introspector is not None
 
         try:
             rel = contract_path.relative_to(cfg.root)

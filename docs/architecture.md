@@ -35,7 +35,7 @@ The layers have different owners and different jobs.
 
 ```mermaid
 flowchart LR
-    SRC[("BigQuery\nsource table")] -->|"select *"| RAW["raw__event\nOrigin Data Product\nowned by source team"]
+    SRC[("BigQuery\nsource table")] -->|"explicit columns\n(introspected)"| RAW["raw__event\nOrigin Data Product\nowned by source team"]
     RAW -->|"{{ ref(...) }}"| STG["stg__event\nConsumption Data Product\nowned by analytics"]
     STG --> DOWN["Downstream\nconsumers"]
 
@@ -43,7 +43,7 @@ flowchart LR
     CTR -. "declares columns,\ncasts, renames" .-> STG
 ```
 
-**Raw** is a `select *` pass-through. It mirrors the source schema exactly. New source columns flow in automatically. The source team can add columns without coordinating with analytics.
+**Raw** mirrors the source schema, with columns introspected explicitly at generation time. New source columns appear after the next `modelgen run` — not automatically. The source team can add columns without coordinating with analytics, but a regeneration is required to pick them up.
 
 **Staging** is the consumer contract. Explicit column selection, renames, and casts. Schema drift is absorbed here; downstream consumers only see the stable contract names.
 
