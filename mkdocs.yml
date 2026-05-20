@@ -20,8 +20,15 @@ nav:
   - Home: index.md
   - Usage: usage.md
   - Technical Reference: reference.md
-  - Architecture Reference: architecture.md
+  - Architecture: architecture.md
   - Security Statement: security.md
+  - BigQuery Engineering:
+    - Overview: bigquery/overview.md
+    - Architecture: bigquery/architecture.md
+    - Table Creation: bigquery/table-creation.md
+    - Historical Backfill: bigquery/historical-backfill.md
+    - SCD Type 2: bigquery/scd2.md
+    - Tooling Decisions: bigquery/decisions.md
 
 plugins:
   - search

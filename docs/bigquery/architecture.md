@@ -1,4 +1,4 @@
-# BQ Architecture
+# 👻 BigQuery Architecture
 
 ## Stack Layers
 
@@ -54,7 +54,7 @@ BQ is OLAP. Not suitable as an OLTP system.
 - Risk and credit models consuming historical data
 - Formerly in SAS/Teradata/Oracle — migrating to BQ/GCP
 
-**SCD2 is OLAP, not OLTP.** The MERGE statement closing a previous record runs once per daily batch, not thousands of times per second. BQ handles it. See [bq-scd2.md](bq-scd2.md).
+**SCD2 is OLAP, not OLTP.** The MERGE statement closing a previous record runs once per daily batch, not thousands of times per second. BQ handles it. See [SCD Type 2](scd2.md).
 
 ## Dataset Naming Convention
 
@@ -76,7 +76,6 @@ BQ is OLAP. Not suitable as an OLTP system.
 
 ## Related
 
-- [bq-table-creation.md](bq-table-creation.md)
-- [bq-scd2.md](bq-scd2.md)
-- [bq-tooling-decisions.md](bq-tooling-decisions.md)
-- `wiki/concepts/Data Engineering Architecture - Layered.md`
+- [Table Creation](table-creation.md)
+- [SCD Type 2](scd2.md)
+- [Tooling Decisions](decisions.md)

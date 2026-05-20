@@ -1,4 +1,4 @@
-# BQ Tooling Decisions
+# 👻 Tooling Decisions
 
 Explicit decisions made about tooling, with reasoning. Exists so these don't get relitigated.
 
@@ -60,4 +60,4 @@ Explicit decisions made about tooling, with reasoning. Exists so these don't get
 
 **Why:** BQ is columnar, optimised for full-partition analytical reads. It cannot do thousands of single-row writes per second with ACID guarantees and sub-millisecond latency. That's what Postgres (Monzo) and DB2/mainframe (Lloyds) are for. BQ receives extracted copies of OLTP state as append-only event logs, after the fact. RegRep, FinRep, dashboards, and risk models run against BQ. Core banking does not.
 
-**SCD2 is fine in BQ** because it runs once per daily batch, not thousands of times per second. See [bq-scd2.md](bq-scd2.md).
+**SCD2 is fine in BQ** because it runs once per daily batch, not thousands of times per second. See [SCD Type 2](scd2.md).

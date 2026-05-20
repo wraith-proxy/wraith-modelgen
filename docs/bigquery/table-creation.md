@@ -1,6 +1,6 @@
-# BQ Table Creation
+# 👻 Table Creation
 
-**Script:** `raw/scripts/bq_table_ddl.sql`
+**Script:** `models/utils/bq_table_ddl.sql`
 
 Three procedures. Pick based on what you know at creation time.
 
@@ -92,7 +92,7 @@ CALL `project.utils.create_table_clone_schema`(
 ```
 1. Terraform apply          → datasets exist (raw, staging, marts, utils)
 2. create_table_like_source → table schema declared, zero rows
-3. historical_backfill      → history loaded (see bq-historical-backfill.md)
+3. historical_backfill      → history loaded (see Historical Backfill)
 4. Daily pipeline           → incremental load takes over
 ```
 
