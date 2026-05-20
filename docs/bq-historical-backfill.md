@@ -65,22 +65,24 @@ Declare variables once at the top of the calling script. Pass them into each pro
 
 ```sql
 DECLARE v_source_project  STRING DEFAULT 'src-project';
+DECLARE v_source_dataset  STRING DEFAULT 'monzo_datawarehouse';
 DECLARE v_target_project  STRING DEFAULT 'tgt-project';
+DECLARE v_target_dataset  STRING DEFAULT 'raw';
 DECLARE v_cutoff_date     DATE   DEFAULT DATE('2026-01-01');
 DECLARE v_batch_id        STRING DEFAULT CONCAT('BACKFILL-', CAST(CURRENT_DATE() AS STRING));
 DECLARE v_rows_loaded     INT64;
 
 -- Load each source table separately
 CALL `project.utils.historical_backfill`(
-    v_source_project, 'monzo_datawarehouse', 'account_created',
-    v_target_project, 'raw', 'account_events',
+    v_source_project, v_source_dataset, 'account_created',
+    v_target_project, v_target_dataset, 'account_events',
     '...select_cols...',
     'created_ts', v_cutoff_date, v_batch_id, v_rows_loaded
 );
 
 -- Verify
 CALL `project.utils.verify_backfill`(
-    v_target_project, 'raw', 'account_events',
+    v_target_project, v_target_dataset, 'account_events',
     v_batch_id, 'event_ts'
 );
 ```

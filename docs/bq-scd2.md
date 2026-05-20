@@ -57,7 +57,7 @@ CALL `project.utils.rebuild_scd2`(
 **How it works:**
 1. `source_events` CTE: applies `select_cols` projection to source table
 2. `scd2` CTE: `LEAD(event_ts)` over `PARTITION BY unique_key ORDER BY event_ts` → `valid_to`
-3. `QUALIFY ROW_NUMBER() = 1` deduplicates simultaneous events (alphabetical tiebreak on event type — arbitrary but stable)
+3. `QUALIFY ROW_NUMBER() = 1` deduplicates simultaneous events using caller-supplied `tiebreak_col` (pass `event_type` for alphabetical ordering — arbitrary but stable)
 4. `CREATE OR REPLACE TABLE` atomically replaces target
 
 ### Pattern B: `utils.merge_scd2` — Incremental MERGE
@@ -127,5 +127,5 @@ SCD2 is defined in staging. Marts consume it. This keeps the mart layer thin —
 ## Related
 
 - [bq-architecture.md](bq-architecture.md) — OLTP vs OLAP, why SCD2 belongs in BQ
-- [bq-struct-data-contracts.md](bq-struct-data-contracts.md) — contract validation after rebuild
+- `models/utils/bq_struct_contract.sql` — contract validation after rebuild
 - `models/utils/bq_stg_scd2.sql` — procedure implementations

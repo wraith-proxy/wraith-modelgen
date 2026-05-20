@@ -30,6 +30,7 @@ CREATE OR REPLACE PROCEDURE `project.utils.rebuild_scd2`(
     target_table        STRING,
     unique_key          STRING,   -- column to partition SCD2 window on (e.g. 'account_id_hashed')
     event_ts_col        STRING,   -- timestamp column for ordering events
+    tiebreak_col        STRING,   -- column for deterministic dedup of simultaneous events (e.g. 'event_type')
     partition_col       STRING,   -- column to partition target table on
     cluster_cols        STRING,   -- comma-separated cluster columns
     select_cols         STRING,   -- projection SQL string — maps source → SCD2 output columns
@@ -96,8 +97,8 @@ BEGIN
         event_ts_col, unique_key, event_ts_col,
         -- ROW_NUMBER for record_version
         unique_key, event_ts_col,
-        -- QUALIFY dedup: same entity + same ts, deterministic tiebreak
-        unique_key, event_ts_col, event_ts_col
+        -- QUALIFY dedup: same entity + same ts, deterministic tiebreak on tiebreak_col
+        unique_key, event_ts_col, tiebreak_col
     );
 
     EXECUTE IMMEDIATE ddl;
@@ -109,6 +110,7 @@ END;
 --     'my-project', 'marts',    'dim_accounts',
 --     'account_id_hashed',
 --     'event_ts',
+--     'event_type',   -- tiebreak_col: alphabetical on event_type for simultaneous events
 --     'valid_from',
 --     'account_id_hashed',
 --     '''

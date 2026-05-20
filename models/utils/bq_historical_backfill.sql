@@ -37,8 +37,7 @@ CREATE OR REPLACE PROCEDURE `project.utils.historical_backfill`(
     OUT rows_loaded INT64
 )
 BEGIN
-    DECLARE dml         STRING;
-    DECLARE verify_sql  STRING;
+    DECLARE dml STRING;
 
     -- Safety: abort if target already has rows from this batch_id.
     -- Prevents double-load on reruns without cleanup.

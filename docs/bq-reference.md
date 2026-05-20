@@ -1,6 +1,6 @@
 # BQ Engineering Reference
 
-Technical reference for BigQuery data engineering patterns. Companion to `raw/scripts/bq_*.sql`.
+Technical reference for BigQuery data engineering patterns. Companion to `models/utils/bq_*.sql`.
 
 ## Documents
 
@@ -10,15 +10,14 @@ Technical reference for BigQuery data engineering patterns. Companion to `raw/sc
 | [bq-table-creation.md](bq-table-creation.md) | DDL patterns — schema inference, explicit schema, clone |
 | [bq-historical-backfill.md](bq-historical-backfill.md) | One-off historical load procedure and orchestration |
 | [bq-scd2.md](bq-scd2.md) | SCD2 — full rebuild vs MERGE incremental, validation |
-| [bq-struct-data-contracts.md](bq-struct-data-contracts.md) | STRUCT access, introspection, contract validation, drift detection |
 | [bq-tooling-decisions.md](bq-tooling-decisions.md) | Why not Liquibase, why not Terraform for tables, why not materialised views |
 
 ## Scripts
 
-All SQL lives in `raw/scripts/`:
+All SQL lives in `models/utils/`:
 
 ```
-raw/scripts/
+models/utils/
 ├── bq_table_ddl.sql           # Stored procedures: create_table_like_source, create_table_explicit, create_table_clone_schema
 ├── bq_historical_backfill.sql # Stored procedures: historical_backfill, verify_backfill
 ├── bq_stg_scd2.sql            # Stored procedures: rebuild_scd2, merge_scd2, validate_scd2
