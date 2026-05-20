@@ -45,7 +45,7 @@ BQ is OLAP. Not suitable as an OLTP system.
 - Payment processing (Faster Payments, BACS, CHAPS, card schemes)
 - Account state management (open/freeze/close, immediately consistent)
 - Fraud decisioning (accept/decline within milliseconds)
-- Monzo: Postgres. Lloyds: IBM mainframe (CICS + DB2).
+- Common OLTP stacks: Postgres, IBM mainframe (CICS + DB2).
 
 **What lives in BQ (OLAP):**
 - All of the above, after the fact, extracted and landed as append-only logs
