@@ -1,6 +1,6 @@
-# BQ SCD2
+# 👻 SCD Type 2
 
-**Script:** `raw/scripts/bq_stg_scd2.sql`
+**Script:** `models/utils/bq_stg_scd2.sql`
 
 ## What SCD2 Is
 
@@ -21,7 +21,7 @@ WHERE valid_from <= TIMESTAMP('2024-08-01')
 
 ## SCD2 is OLAP, Not OLTP
 
-The MERGE that closes the previous record runs once per daily batch. Not thousands of times per second. BQ handles it. See [bq-architecture.md](bq-architecture.md) for the OLTP vs OLAP distinction.
+The MERGE that closes the previous record runs once per daily batch. Not thousands of times per second. BQ handles it. See [Architecture](architecture.md) for the OLTP vs OLAP distinction.
 
 ## Two Procedures
 
@@ -126,6 +126,6 @@ SCD2 is defined in staging. Marts consume it. This keeps the mart layer thin —
 
 ## Related
 
-- [bq-architecture.md](bq-architecture.md) — OLTP vs OLAP, why SCD2 belongs in BQ
+- [Architecture](architecture.md) — OLTP vs OLAP, why SCD2 belongs in BQ
 - `models/utils/bq_struct_contract.sql` — contract validation after rebuild
 - `models/utils/bq_stg_scd2.sql` — procedure implementations

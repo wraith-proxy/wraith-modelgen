@@ -1,4 +1,4 @@
-# BQ Engineering Reference
+# 👻 BigQuery Engineering
 
 Technical reference for BigQuery data engineering patterns. Companion to `models/utils/bq_*.sql`.
 
@@ -6,11 +6,11 @@ Technical reference for BigQuery data engineering patterns. Companion to `models
 
 | Doc | What it covers |
 |---|---|
-| [bq-architecture.md](bq-architecture.md) | Stack overview — TF vs dbt, OLTP vs OLAP, layer responsibilities |
-| [bq-table-creation.md](bq-table-creation.md) | DDL patterns — schema inference, explicit schema, clone |
-| [bq-historical-backfill.md](bq-historical-backfill.md) | One-off historical load procedure and orchestration |
-| [bq-scd2.md](bq-scd2.md) | SCD2 — full rebuild vs MERGE incremental, validation |
-| [bq-tooling-decisions.md](bq-tooling-decisions.md) | Why not Liquibase, why not Terraform for tables, why not materialised views |
+| [Architecture](architecture.md) | Stack overview — TF vs dbt, OLTP vs OLAP, layer responsibilities |
+| [Table Creation](table-creation.md) | DDL patterns — schema inference, explicit schema, clone |
+| [Historical Backfill](historical-backfill.md) | One-off historical load procedure and orchestration |
+| [SCD Type 2](scd2.md) | SCD2 — full rebuild vs MERGE incremental, validation |
+| [Tooling Decisions](decisions.md) | Why not Liquibase, why not Terraform for tables, why not materialised views |
 
 ## Scripts
 

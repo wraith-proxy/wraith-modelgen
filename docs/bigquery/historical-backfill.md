@@ -1,13 +1,13 @@
-# BQ Historical Backfill
+# 👻 Historical Backfill
 
-**Script:** `raw/scripts/bq_historical_backfill.sql`
+**Script:** `models/utils/bq_historical_backfill.sql`
 
 ## When to Use
 
 One-off operation. Runs once after DDL bootstrap to load all historical records before the daily incremental pipeline takes over.
 
 ```
-bq_table_ddl.sql     → tables exist, zero rows
+Table Creation       → tables exist, zero rows
 THIS                 → all history loaded up to cutoff_date
 Daily pipeline       → owns cutoff_date onward
 ```
