@@ -65,7 +65,7 @@ Declare variables once at the top of the calling script. Pass them into each pro
 
 ```sql
 DECLARE v_source_project  STRING DEFAULT 'src-project';
-DECLARE v_source_dataset  STRING DEFAULT 'monzo_datawarehouse';
+DECLARE v_source_dataset  STRING DEFAULT 'source_datawarehouse';
 DECLARE v_target_project  STRING DEFAULT 'tgt-project';
 DECLARE v_target_dataset  STRING DEFAULT 'raw';
 DECLARE v_cutoff_date     DATE   DEFAULT DATE('2026-01-01');

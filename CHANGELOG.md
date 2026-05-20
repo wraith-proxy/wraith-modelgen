@@ -5,6 +5,63 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.0] - 2026-05-20
+
+### Changed
+
+- BigQuery engineering docs: prose tidied, example values genericised, lipstick applied.
+
+---
+
+## [0.8.0] - 2026-05-20
+
+### Changed
+
+- BigQuery reference docs reorganised from flat `docs/bq-*.md` into `docs/bigquery/` subdirectory.
+- `docs/bigquery/architecture.md`: OLTP vs OLAP table expanded; stack layer diagram and dataset naming convention clarified.
+- `docs/bigquery/decisions.md`: All decisions reviewed; reasoning tightened.
+- `docs/bigquery/historical-backfill.md`: Orchestration script example rewritten to use declared variables throughout; idempotency guard and cutoff date sections expanded.
+- `docs/bigquery/overview.md`: Added.
+- `docs/bigquery/scd2.md`: Revised.
+- `docs/bigquery/table-creation.md`: Revised.
+- `mkdocs.yml`: Navigation updated for new doc structure.
+
+---
+
+## [0.7.0] - 2026-05-20
+
+### Added
+
+- Six parameterised BigQuery stored procedures under `models/utils/`:
+  - `bq_table_ddl.sql`: DDL bootstrap for raw, staging, and mart tables.
+  - `bq_historical_backfill.sql`: One-off historical load with idempotency guard and verification procedure.
+  - `bq_stg_scd2.sql`: SCD Type 2 full rebuild and MERGE incremental procedures.
+  - `bq_struct_contract.sql`: STRUCT introspection and data contract validation against `COLUMN_FIELD_PATHS`.
+- Six engineering reference docs under `docs/` covering BigQuery architecture, tooling decisions, table creation, SCD2, historical backfill, and procedure reference.
+
+### Fixed
+
+- Removed unused `verify_sql` variable from `historical_backfill` procedure.
+- Added `tiebreak_col` parameter to `rebuild_scd2`; simultaneous-event dedup within a `QUALIFY` partition was previously non-deterministic.
+- Fixed doc paths (`raw/scripts` → `models/utils`) and removed broken reference links.
+
+---
+
+## [0.6.0] - 2026-05-18
+
+### Added
+
+- `contracts/example_contract.yml`: Annotated example contract for offline development and documentation.
+- `models/raw/` and `models/staging/` subdirectories; generated models now written into layer-specific directories.
+
+### Changed
+
+- GCP credentials no longer required at import time. Credential resolution deferred to `gen` invocation; `introspect.py` and `cli.py` updated accordingly.
+- Raw template (`src/templates/raw.sql.j2`) updated.
+- Tests updated to cover credential-free operation.
+
+---
+
 ## [0.5.0] - 2026-05-17
 
 ### Added
@@ -90,19 +147,3 @@ First proper release. Not backwards compatible with any pre-release state.
 ## [0.0.1] - 2026-05-16
 
 Initial commit. Ghost Stack project scaffold. Nothing generated yet.
-
-## v0.8.0 (2026-05-20)
-
-## v0.7.0 (2026-05-20)
-
-## v0.6.0 (2026-05-18)
-
-## v0.5.0 (2026-05-17)
-
-## v0.4.0 (2026-05-16)
-
-## v0.3.0 (2026-05-16)
-
-## v0.2.0 (2026-05-16)
-
-## v0.1.0 (2026-05-16)
