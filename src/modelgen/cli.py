@@ -6,6 +6,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -506,8 +507,196 @@ def run(
 
     if errors:
         for name, layer_name, msg in errors:
-            console.print(f"[red]Error[/red] [{layer_name}] {name}: {msg}")
+            console.print(
+                f"[red]Error[/red] {escape(f'[{layer_name}] {name}: {msg}')}"
+            )
         raise typer.Exit(1)
+
+
+@app.command()
+def check(
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help=(
+            "Path to .modelgen.yml. Auto-discovered from cwd"
+            " upward if not given."
+        ),
+    ),
+    diff: bool = typer.Option(
+        False,
+        "--diff",
+        help="Print a unified diff for every drifted file.",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable debug logging."
+    ),
+    from_contract: bool = typer.Option(
+        False,
+        "--from-contract",
+        help=(
+            "Skip BigQuery introspection for all contracts. Types and"
+            " column list come from each contract's staging declarations."
+        ),
+    ),
+):
+    """
+    Verify committed models match what the contracts would generate.
+
+    Renders every contract in memory and compares the output against the
+    files on disk. Nothing is written. Exit code 0 means everything is
+    in sync; 1 means drift, missing files, or contract errors — wire it
+    straight into CI next to your linter.
+
+    \b
+    Typical CI step:
+      modelgen check --diff
+    """
+    _configure_logging(verbose)
+
+    from modelgen.config import ConfigError, ModelgenConfig
+    from modelgen.introspect import (
+        BigQueryIntrospector,
+        ContractIntrospector,
+        has_default_credentials,
+    )
+
+    try:
+        if config is not None:
+            cfg = ModelgenConfig.from_file(config)
+        else:
+            cfg = ModelgenConfig.discover(Path.cwd())
+    except ConfigError as e:
+        console.print(f"[red]Config error:[/red] {e}")
+        raise typer.Exit(1)
+
+    contract_files = cfg.contract_files()
+    if not contract_files:
+        console.print(
+            f"[yellow]No contracts found.[/yellow] "
+            f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
+            f" matched nothing in {cfg.root}"
+        )
+        raise typer.Exit(0)
+
+    use_contract_introspection = from_contract or not has_default_credentials()
+    if use_contract_introspection and not from_contract:
+        console.print(
+            "[yellow]No GCP credentials found."
+            " Checking against contracts only.[/yellow]"
+        )
+
+    shared_introspector = (
+        None if use_contract_introspection else BigQueryIntrospector()
+    )
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Contract")
+    table.add_column("Layer")
+    table.add_column("File")
+    table.add_column("Status")
+
+    errors: list[tuple[str, str, str]] = []
+    drifted: list[tuple[Path, str, str]] = []  # path, on_disk, expected
+    in_sync = 0
+
+    for contract_path in contract_files:
+        try:
+            event = EventContract.from_file(contract_path)
+        except ContractError as e:
+            errors.append((contract_path.name, "parse", str(e)))
+            continue
+
+        lint_errs = _lint_errors(event)
+        if lint_errs:
+            errors.append(
+                (
+                    contract_path.name,
+                    "lint",
+                    "; ".join(f.message for f in lint_errs),
+                )
+            )
+            continue
+
+        introspector = (
+            ContractIntrospector(event)
+            if use_contract_introspection
+            else shared_introspector
+        )
+        assert introspector is not None
+
+        try:
+            rel = contract_path.relative_to(cfg.root)
+        except ValueError:
+            rel = contract_path
+
+        layers: list[tuple[Layer, Path]] = [(Layer.RAW, cfg.raw_output)]
+        if event.staging.columns:
+            layers.append((Layer.STAGING, cfg.staging_output))
+
+        for layer, output_dir in layers:
+            try:
+                result = generate(
+                    contract=event,
+                    introspector=introspector,
+                    output_dir=output_dir,
+                    layer=layer,
+                    contract_path=str(rel),
+                    dry_run=True,
+                )
+            except (GenerationError, IntrospectionError) as e:
+                errors.append((contract_path.name, layer.value, str(e)))
+                continue
+
+            for filename, expected in result.artefacts.items():
+                dest = output_dir / filename
+                if not dest.exists():
+                    drifted.append((dest, "", expected))
+                    status = "[red]missing[/red]"
+                elif dest.read_text() != expected:
+                    drifted.append((dest, dest.read_text(), expected))
+                    status = "[red]drift[/red]"
+                else:
+                    in_sync += 1
+                    status = "[green]in sync[/green]"
+                table.add_row(
+                    contract_path.name, layer.value, filename, status
+                )
+
+    console.print(table)
+
+    if diff and drifted:
+        import difflib
+
+        for dest, on_disk, expected in drifted:
+            udiff = difflib.unified_diff(
+                on_disk.splitlines(keepends=True),
+                expected.splitlines(keepends=True),
+                fromfile=f"{dest} (on disk)",
+                tofile=f"{dest} (expected)",
+            )
+            console.print(f"[bold]--- {dest}[/bold]")
+            console.print("".join(udiff), markup=False, highlight=False)
+
+    if errors:
+        for name, layer_name, msg in errors:
+            console.print(
+                f"[red]Error[/red] {escape(f'[{layer_name}] {name}: {msg}')}"
+            )
+
+    if drifted or errors:
+        console.print(
+            f"[red]Drift detected:[/red] {len(drifted)} file(s) out of"
+            f" sync, {len(errors)} error(s)."
+            " Run [bold]modelgen run[/bold] and commit the result."
+        )
+        raise typer.Exit(1)
+
+    console.print(
+        f"[green]Everything in sync.[/green] {in_sync} file(s) match"
+        " their contracts."
+    )
 
 
 def main():

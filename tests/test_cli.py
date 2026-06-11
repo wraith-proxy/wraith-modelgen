@@ -496,6 +496,105 @@ class TestRunCommand:
         assert not (tmp_path / "models" / "staging").exists()
         assert (tmp_path / "models" / "raw").exists()
 
+
+class TestCheckCommand:
+    @pytest.fixture
+    def repo(self, tmp_path) -> Path:
+        (tmp_path / "contracts").mkdir()
+        (tmp_path / "contracts" / "user_signed_up.yml").write_text(
+            CONTRACT_YAML
+        )
+        (tmp_path / ".modelgen.yml").write_text(
+            "contracts: contracts/*.yml\n"
+            "raw_output: models/raw\n"
+            "staging_output: models/staging\n"
+        )
+        return tmp_path
+
+    def _run_then_check(self, repo, *check_args):
+        cfg = str(repo / ".modelgen.yml")
+        gen = runner.invoke(app, ["run", "--config", cfg])
+        assert gen.exit_code == 0, gen.output
+        return runner.invoke(app, ["check", "--config", cfg, *check_args])
+
+    def test_clean_repo_exits_zero(self, repo):
+        result = self._run_then_check(repo)
+        assert result.exit_code == 0, result.output
+        assert "in sync" in strip_ansi(result.output)
+
+    def test_check_writes_nothing(self, repo):
+        cfg = str(repo / ".modelgen.yml")
+        result = runner.invoke(app, ["check", "--config", cfg])
+        assert result.exit_code == 1
+        assert not (repo / "models").exists()
+
+    def test_missing_files_exit_1(self, repo):
+        cfg = str(repo / ".modelgen.yml")
+        result = runner.invoke(app, ["check", "--config", cfg])
+        assert result.exit_code == 1
+        assert "missing" in strip_ansi(result.output)
+
+    def test_drifted_file_exits_1(self, repo):
+        result = self._run_then_check(repo)
+        assert result.exit_code == 0
+        sql = repo / "models" / "raw" / "raw__user_signed_up.sql"
+        sql.write_text(sql.read_text() + "\n-- hand edit\n")
+        check = runner.invoke(
+            app, ["check", "--config", str(repo / ".modelgen.yml")]
+        )
+        assert check.exit_code == 1
+        assert "drift" in strip_ansi(check.output)
+
+    def test_diff_flag_shows_unified_diff(self, repo):
+        self._run_then_check(repo)
+        sql = repo / "models" / "raw" / "raw__user_signed_up.sql"
+        sql.write_text(sql.read_text() + "\n-- hand edit\n")
+        check = runner.invoke(
+            app,
+            ["check", "--config", str(repo / ".modelgen.yml"), "--diff"],
+        )
+        assert check.exit_code == 1
+        output = strip_ansi(check.output)
+        assert "-- hand edit" in output
+        assert "expected" in output
+
+    def test_check_reports_lint_errors(self, tmp_path):
+        (tmp_path / "contracts").mkdir()
+        (tmp_path / "contracts" / "bad.yml").write_text(
+            CONTRACT_YAML.replace(
+                "incremental_strategy: merge",
+                "incremental_strategy: mrege",
+            )
+        )
+        cfg = tmp_path / ".modelgen.yml"
+        cfg.write_text("contracts: contracts/*.yml\n")
+        result = runner.invoke(app, ["check", "--config", str(cfg)])
+        assert result.exit_code == 1
+        assert "lint" in strip_ansi(result.output)
+
+    def test_check_no_contracts_exits_zero(self, tmp_path):
+        cfg = tmp_path / ".modelgen.yml"
+        cfg.write_text("contracts: contracts/*.yml\n")
+        result = runner.invoke(app, ["check", "--config", str(cfg)])
+        assert result.exit_code == 0
+        assert "No contracts found" in strip_ansi(result.output)
+
+    def test_check_skips_staging_when_no_columns(self, tmp_path):
+        (tmp_path / "contracts").mkdir()
+        (tmp_path / "contracts" / "raw_only.yml").write_text(
+            _RAW_ONLY_CONTRACT
+        )
+        cfg = tmp_path / ".modelgen.yml"
+        cfg.write_text("contracts: contracts/*.yml\n")
+        runner.invoke(app, ["run", "--config", str(cfg)])
+        result = runner.invoke(app, ["check", "--config", str(cfg)])
+        assert result.exit_code == 0, result.output
+        assert "staging" not in strip_ansi(result.output).lower().replace(
+            "models/staging", ""
+        )
+
+
+class TestRunCommandOutputDirs:
     def test_run_uses_custom_output_dirs(self, tmp_path):
         (tmp_path / "contracts").mkdir()
         (tmp_path / "contracts" / "user_signed_up.yml").write_text(
