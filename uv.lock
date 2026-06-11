@@ -1717,7 +1717,6 @@ name = "wraith-modelgen"
 version = "0.9.0"
 source = { editable = "." }
 dependencies = [
-    { name = "genbadge", extra = ["coverage"] },
     { name = "google-cloud-bigquery" },
     { name = "jinja2" },
     { name = "pyyaml" },
@@ -1729,6 +1728,7 @@ dependencies = [
 dev = [
     { name = "commitizen" },
     { name = "detect-secrets" },
+    { name = "genbadge", extra = ["coverage"] },
     { name = "mkdocs" },
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
@@ -1751,7 +1751,7 @@ dev = [
 requires-dist = [
     { name = "commitizen", marker = "extra == 'dev'" },
     { name = "detect-secrets", marker = "extra == 'dev'" },
-    { name = "genbadge", extras = ["coverage"], specifier = ">=1.1.3" },
+    { name = "genbadge", extras = ["coverage"], marker = "extra == 'dev'", specifier = ">=1.1.3" },
     { name = "google-cloud-bigquery", specifier = ">=3.20" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "mkdocs", marker = "extra == 'dev'" },

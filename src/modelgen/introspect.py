@@ -76,7 +76,7 @@ class BigQueryIntrospector:
             except ImportError as e:
                 raise IntrospectionError(
                     "google-cloud-bigquery is not installed. "
-                    "Install with: uv pip install 'modelgen'"
+                    "Install with: uv pip install 'wraith-modelgen'"
                 ) from e
             self._client = bigquery.Client()
         return self._client

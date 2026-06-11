@@ -21,7 +21,7 @@ from modelgen.introspect import IntrospectedColumn, Introspector
 
 logger = logging.getLogger(__name__)
 
-_TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
+_TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
 class Layer(str, Enum):
