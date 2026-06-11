@@ -305,6 +305,66 @@ class TestValidateCommand:
         result = runner.invoke(app, ["validate", str(p)])
         assert result.exit_code == 1
 
+    def test_semantic_error_exits_1(self, tmp_path):
+        p = tmp_path / "bad_strategy.yml"
+        p.write_text(
+            CONTRACT_YAML.replace(
+                "incremental_strategy: merge",
+                "incremental_strategy: mrege",
+            )
+        )
+        result = runner.invoke(app, ["validate", str(p)])
+        assert result.exit_code == 1
+        output = strip_ansi(result.output)
+        assert "invalid-raw-strategy" in output
+        assert "FAIL" in output
+
+    def test_warnings_pass_without_strict(self, tmp_path):
+        p = tmp_path / "warns.yml"
+        # Contract columns carry no descriptions → warnings only
+        p.write_text(CONTRACT_YAML)
+        result = runner.invoke(app, ["validate", str(p)])
+        assert result.exit_code == 0
+        assert "OK" in strip_ansi(result.output)
+
+    def test_strict_turns_warnings_into_failure(self, tmp_path):
+        p = tmp_path / "warns.yml"
+        p.write_text(CONTRACT_YAML)
+        result = runner.invoke(app, ["validate", str(p), "--strict"])
+        assert result.exit_code == 1
+        assert "FAIL" in strip_ansi(result.output)
+
+    def test_all_errors_reported_in_one_pass(self, tmp_path):
+        p = tmp_path / "multi.yml"
+        p.write_text(
+            CONTRACT_YAML.replace(
+                "incremental_strategy: merge",
+                "incremental_strategy: mrege",
+            ).replace("type: STRING", "type: VARCHAR")
+        )
+        result = runner.invoke(app, ["validate", str(p)])
+        output = strip_ansi(result.output)
+        assert "invalid-raw-strategy" in output
+        assert "invalid-column-type" in output
+
+
+class TestGenLintGate:
+    def test_gen_refuses_contract_with_lint_errors(
+        self, contract_file, tmp_path
+    ):
+        contract_file.write_text(
+            contract_file.read_text().replace(
+                "incremental_strategy: merge",
+                "incremental_strategy: mrege",
+            )
+        )
+        result = runner.invoke(
+            app, ["gen", str(contract_file), "--raw", "-o", str(tmp_path)]
+        )
+        assert result.exit_code == 1
+        assert "failed lint" in strip_ansi(result.output)
+        assert not (tmp_path / "raw__user_signed_up.sql").exists()
+
 
 # ---------------------------------------------------------------------------
 # run command
@@ -399,6 +459,20 @@ class TestRunCommand:
         assert result.exit_code == 0, result.output
         assert "raw__user_signed_up.sql" in strip_ansi(result.output)
         assert "raw__page_viewed.sql" in strip_ansi(result.output)
+
+    def test_run_lint_error_exits_1(self, tmp_path):
+        (tmp_path / "contracts").mkdir()
+        (tmp_path / "contracts" / "bad.yml").write_text(
+            CONTRACT_YAML.replace(
+                "incremental_strategy: merge",
+                "incremental_strategy: mrege",
+            )
+        )
+        cfg = tmp_path / ".modelgen.yml"
+        cfg.write_text("contracts: contracts/*.yml\n")
+        result = runner.invoke(app, ["run", "--config", str(cfg)])
+        assert result.exit_code == 1
+        assert "lint" in strip_ansi(result.output)
 
     def test_run_invalid_contract_exits_1(self, tmp_path):
         (tmp_path / "contracts").mkdir()

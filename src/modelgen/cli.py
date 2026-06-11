@@ -13,6 +13,7 @@ from modelgen import __version__
 from modelgen.contract import ContractError, EventContract
 from modelgen.generator import GenerationError, Layer, generate
 from modelgen.introspect import IntrospectionError
+from modelgen.lint import Finding, lint_contract
 
 app = typer.Typer(
     name="modelgen",
@@ -48,6 +49,19 @@ def _main(
     ),
 ) -> None:
     pass
+
+
+def _print_findings(findings: list[Finding]) -> None:
+    for f in findings:
+        colour = "red" if f.is_error else "yellow"
+        label = "error  " if f.is_error else "warning"
+        console.print(
+            f"[{colour}]{label}[/{colour}] [dim]{f.code}[/dim] {f.message}"
+        )
+
+
+def _lint_errors(event: EventContract) -> list[Finding]:
+    return [f for f in lint_contract(event) if f.is_error]
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -136,6 +150,16 @@ def gen(
         event = EventContract.from_file(contract)
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
+        raise typer.Exit(1)
+
+    lint_errs = _lint_errors(event)
+    if lint_errs:
+        _print_findings(lint_errs)
+        console.print(
+            f"[red]Contract failed lint with {len(lint_errs)}"
+            " error(s).[/red] Run [bold]modelgen validate[/bold]"
+            " for the full report."
+        )
         raise typer.Exit(1)
 
     from modelgen.introspect import (
@@ -236,24 +260,46 @@ def validate(
         exists=True,
         readable=True,
     ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Treat warnings as errors. For CI gates with standards.",
+    ),
 ):
     """
-    Validate a contract's YAML structure without connecting to BigQuery.
+    Validate a contract offline: structure first, then semantics.
 
-    Runs offline. Catches parse errors, missing fields, and bad values
-    before you spend a round-trip to BigQuery finding out.
+    Catches parse errors, missing fields, bad values, invalid BigQuery
+    types and strategies, duplicate or unsafe column declarations, and
+    staging configs that reference columns the model never selects —
+    all in one pass, before you spend a round-trip to BigQuery.
     """
     try:
         event = EventContract.from_file(contract)
-        console.print(
-            f"[green]OK[/green] [bold]{event.name}[/bold]\n"
-            f"  Source:   {event.source.fqn}\n"
-            f"  Key:      {', '.join(event.unique_key)}\n"
-            f"  Columns:  {len(event.staging.columns)} staging declared"
-        )
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
         raise typer.Exit(1)
+
+    findings = lint_contract(event)
+    _print_findings(findings)
+    errs = [f for f in findings if f.is_error]
+    warns = [f for f in findings if not f.is_error]
+
+    if errs or (strict and warns):
+        console.print(
+            f"[red]FAIL[/red] [bold]{event.name}[/bold]:"
+            f" {len(errs)} error(s), {len(warns)} warning(s)"
+            + (" [dim](--strict)[/dim]" if strict and not errs else "")
+        )
+        raise typer.Exit(1)
+
+    console.print(
+        f"[green]OK[/green] [bold]{event.name}[/bold]\n"
+        f"  Source:   {event.source.fqn}\n"
+        f"  Key:      {', '.join(event.unique_key)}\n"
+        f"  Columns:  {len(event.staging.columns)} staging declared\n"
+        f"  Warnings: {len(warns)}"
+    )
 
 
 @app.command()
@@ -371,6 +417,17 @@ def run(
             event = EventContract.from_file(contract_path)
         except ContractError as e:
             errors.append((contract_path.name, "parse", str(e)))
+            continue
+
+        lint_errs = _lint_errors(event)
+        if lint_errs:
+            errors.append(
+                (
+                    contract_path.name,
+                    "lint",
+                    "; ".join(f.message for f in lint_errs),
+                )
+            )
             continue
 
         introspector = (
