@@ -142,7 +142,7 @@ uv run poe lint         # ruff check
 uv run poe format       # ruff format
 ```
 
-The test suite uses `FakeIntrospector` and runs without BigQuery credentials. Covers contract parsing, both layers, schema evolution scenarios, composite keys, REPEATED/RECORD types, determinism, and error surfaces.
+The test suite uses `FakeIntrospector` and runs without BigQuery credentials. Covers contract parsing, semantic linting, both layers, schema evolution scenarios, composite keys, REPEATED/RECORD types, determinism, drift detection, contract scaffolding, and error surfaces.
 
 ### Committing
 
