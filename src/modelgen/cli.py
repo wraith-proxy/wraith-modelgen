@@ -699,6 +699,132 @@ def check(
     )
 
 
+@app.command()
+def new(
+    table: str = typer.Argument(
+        ...,
+        help="Fully-qualified source table: project.dataset.table",
+    ),
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        "-n",
+        help="Event name for the contract. Default: derived from table.",
+    ),
+    output: Path = typer.Option(
+        Path("./contracts"),
+        "--output",
+        "-o",
+        help="Directory to write the contract into. Default: ./contracts.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing contract file.",
+    ),
+):
+    """
+    Bootstrap a draft contract from a live BigQuery table.
+
+    Introspects the table and writes a contract with every column
+    declared in staging, plus guessed unique_key and loaded_at_field
+    (marked TODO — confirm them before the contract goes live).
+    Requires GCP Application Default Credentials.
+    """
+    from modelgen.introspect import (
+        BigQueryIntrospector,
+        has_default_credentials,
+    )
+    from modelgen.scaffold import ScaffoldError, draft_contract
+
+    parts = table.split(".")
+    if len(parts) != 3 or not all(parts):
+        console.print(
+            f"[red]Expected project.dataset.table,"
+            f" got {escape(repr(table))}.[/red]"
+        )
+        raise typer.Exit(2)
+    project, dataset, table_name = parts
+
+    if not has_default_credentials():
+        console.print(
+            "[red]No GCP credentials found.[/red] modelgen new needs to"
+            " introspect the source table. Run:\n"
+            "  gcloud auth application-default login"
+        )
+        raise typer.Exit(1)
+
+    try:
+        columns = BigQueryIntrospector().get_columns(
+            project, dataset, table_name
+        )
+        yaml_text = draft_contract(
+            project, dataset, table_name, columns, name=name
+        )
+    except (IntrospectionError, ScaffoldError) as e:
+        console.print(f"[red]Could not draft contract:[/red] {e}")
+        raise typer.Exit(1)
+
+    event = EventContract.from_text(yaml_text)
+    dest = output / f"{event.name}.yml"
+    if dest.exists() and not force:
+        console.print(
+            f"[red]{dest} already exists.[/red] Pass --force to overwrite."
+        )
+        raise typer.Exit(1)
+    output.mkdir(parents=True, exist_ok=True)
+    dest.write_text(yaml_text)
+
+    console.print(
+        Panel(
+            f"[bold]Contract:[/bold]  {dest}\n"
+            f"[bold]Event:[/bold]     {event.name}\n"
+            f"[bold]Columns:[/bold]   {len(columns)} declared in staging\n"
+            f"[bold]Key:[/bold]       {', '.join(event.unique_key)}"
+            "  [dim](guessed)[/dim]\n"
+            f"[bold]Loaded at:[/bold] {event.loaded_at_field}"
+            "  [dim](guessed)[/dim]",
+            title="[bold green]👻 modelgen new[/bold green]",
+            subtitle="[dim]review the TODOs before generating[/dim]",
+            expand=False,
+        )
+    )
+    console.print(
+        "[dim]Next: confirm unique_key and loaded_at_field, add"
+        " descriptions, then run [bold]modelgen run[/bold].[/dim]"
+    )
+
+
+@app.command()
+def init(
+    directory: Path = typer.Argument(
+        Path("."),
+        help="Project root to initialise. Default: current directory.",
+    ),
+):
+    """
+    Initialise a modelgen project layout.
+
+    Creates .modelgen.yml with documented defaults plus the contracts/
+    and models/ directories. Safe to run in an existing repo; refuses
+    to touch a project that already has a .modelgen.yml.
+    """
+    from modelgen.scaffold import ScaffoldError, init_project
+
+    try:
+        created = init_project(directory)
+    except ScaffoldError as e:
+        console.print(f"[yellow]{e}[/yellow]")
+        raise typer.Exit(1)
+
+    for path in created:
+        console.print(f"[green]created[/green] {path}")
+    console.print(
+        "\n[dim]Next: [bold]modelgen new project.dataset.table[/bold]"
+        " to draft your first contract.[/dim]"
+    )
+
+
 def main():
     app()
 
