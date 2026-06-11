@@ -32,16 +32,29 @@ gcloud auth application-default login
 ## ⚙️ Workflow
 
 ```bash
-modelgen gen contract.yml --raw     -o ./models/raw
-modelgen gen contract.yml --staging -o ./models/staging
+modelgen init                                  # scaffold .modelgen.yml + dirs (once)
+modelgen new my-project.landing.user_signups   # draft a contract from a live table
+modelgen validate contracts/user_signups.yml   # offline semantic lint, all findings at once
+modelgen run                                   # regenerate every layer of every contract
+modelgen check --diff                          # CI: fail if committed models drifted
 ```
 
-One layer per invocation. `--raw` and `--staging` are mutually exclusive.
+Single layers when you need them — `--raw` and `--staging` are mutually exclusive:
 
 ```bash
-modelgen validate contract.yml      # validate YAML without hitting BigQuery
+modelgen gen contract.yml --raw     -o ./models/raw
+modelgen gen contract.yml --staging -o ./models/staging
 modelgen gen contract.yml --raw --dry-run  # preview without writing
 ```
+
+| Command | What it does |
+|---|---|
+| `init` | Scaffold project layout: `.modelgen.yml`, `contracts/`, `models/` |
+| `new` | Bootstrap a draft contract from a live BigQuery table, keys guessed and marked TODO |
+| `validate` | Offline structural + semantic lint; `--strict` promotes warnings to failures |
+| `gen` | Generate one layer from one contract |
+| `run` | Regenerate every layer of every contract under `.modelgen.yml` |
+| `check` | Render in memory, diff against disk, exit non-zero on drift. Writes nothing. |
 
 ---
 
@@ -149,7 +162,7 @@ uv run cz commit
 
 1. **One layer per invocation.** Layers have different lifecycles; conflating them makes things harder to reason about.
 2. **Introspection at gen time.** The warehouse is the source of truth for column names and types. Drift is impossible because nothing is duplicated.
-3. **Deterministic output.** Same contract + same source schema = byte-identical files. CI can diff against committed output to catch drift.
+3. **Deterministic output.** Same contract + same source schema = byte-identical files. `modelgen check` turns this into a CI gate.
 4. **Strict failure on missing columns.** No silent passes. If the contract references a column the source no longer has, generation fails with the column name.
 5. **BigQuery only.** The introspection module is BQ-native. Add a different `Introspector` implementation if you need another warehouse.
 

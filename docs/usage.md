@@ -1,42 +1,91 @@
 # 👻 Usage
 
-## Workflow
+## Lifecycle
 
-Write a contract. Validate it. Generate. Commit. Repeat when the source changes.
+Initialise once. Draft contracts from live tables. Generate. Let CI
+prove nothing drifted.
 
 ```mermaid
 flowchart LR
-    A["Write\ncontract.yml"] --> B["modelgen validate"]
-    B --> C{Valid?}
-    C -->|no| A
-    C -->|yes| D["modelgen gen --raw\n-o models/raw"]
-    D --> E["modelgen gen --staging\n-o models/staging"]
-    E --> F["Commit generated\nmodels to repo"]
-    F --> G{Source schema\nchanged?}
-    G -->|yes| H["Update contract\nregenerate"]
-    G -->|no| F
-    H --> D
+    A["modelgen init"] --> B["modelgen new\nproject.dataset.table"]
+    B --> C["Review TODOs\nin the draft"]
+    C --> D["modelgen validate"]
+    D --> E{Valid?}
+    E -->|no| C
+    E -->|yes| F["modelgen run"]
+    F --> G["Commit contracts\n+ generated models"]
+    G --> H["modelgen check\nin CI"]
+    H -->|drift| F
+    H -->|in sync| G
 ```
 
-Or, if you have `.modelgen.yml` set up, skip the per-layer invocations:
-
 ```bash
-modelgen run
+modelgen init                                  # once per repo
+modelgen new my-project.landing.user_signups   # draft a contract
+modelgen validate contracts/user_signups.yml   # lint it
+modelgen run                                   # generate both layers
+modelgen check                                 # CI: prove nothing drifted
 ```
 
 ---
 
 ## Commands
 
-### `modelgen validate`
+### `modelgen init`
 
-Offline contract validation. No BigQuery credentials or network access needed.
+Scaffold a modelgen project: a documented `.modelgen.yml` plus
+`contracts/` and `models/` directories. Refuses to touch a repo that
+already has a `.modelgen.yml`.
 
 ```bash
-modelgen validate contract.yml
+modelgen init [DIRECTORY]
 ```
 
-Run this before `gen` to catch YAML errors without a round-trip to BigQuery.
+---
+
+### `modelgen new`
+
+Bootstrap a draft contract from a live BigQuery table. Requires GCP
+Application Default Credentials.
+
+```bash
+modelgen new PROJECT.DATASET.TABLE [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `-n`, `--name` | Event name (default: derived from the table name) |
+| `-o`, `--output PATH` | Directory for the contract (default: `./contracts`) |
+| `--force` | Overwrite an existing contract file |
+
+The draft declares **every** source column in staging with introspected
+types and descriptions, guesses `unique_key` (column names ending in
+`id`/`key`/`guid`/`uuid`) and `loaded_at_field` (temporal columns named
+like `received`/`loaded`/`created`/`*_at`), derives partition config
+from the loaded-at column, and pre-wires `[not_null, unique]` tests on
+the key. Guesses are marked `# TODO: confirm guess` — review them
+before the contract goes live. `RECORD` and `REPEATED` columns are
+declared without a cast.
+
+---
+
+### `modelgen validate`
+
+Offline validation: YAML structure first, then a full semantic lint.
+No BigQuery credentials or network access needed.
+
+```bash
+modelgen validate contract.yml [--strict]
+```
+
+All findings are reported in one pass — typo'd incremental strategies,
+casts to types BigQuery has never heard of, duplicate columns, unsafe
+identifiers, partition or cluster references to undeclared staging
+columns, and keys the staging model never selects. See the
+[lint rule catalogue](linting.md).
+
+`--strict` turns warnings (missing descriptions, untested keys) into
+failures. For CI gates with standards.
 
 ---
 
@@ -57,7 +106,8 @@ modelgen gen CONTRACT [OPTIONS]
 | `-v`, `--verbose` | Debug logging |
 | `--from-contract` | Skip BigQuery introspection (see below) |
 
-Exactly one of `--raw` or `--staging` is required.
+Exactly one of `--raw` or `--staging` is required. Contracts with lint
+errors are refused before any generation happens.
 
 **Examples:**
 
@@ -70,9 +120,6 @@ modelgen gen contract.yml --staging -o ./models/staging
 
 # Preview what would be written
 modelgen gen contract.yml --raw --dry-run
-
-# Verbose output
-modelgen gen contract.yml --staging --verbose
 
 # Offline — no BigQuery connection needed
 modelgen gen contract.yml --raw --from-contract
@@ -103,45 +150,70 @@ raw_output: models/raw
 staging_output: models/staging
 ```
 
-If `.modelgen.yml` is not found, these defaults apply:
+If `.modelgen.yml` is not found, those values are also the defaults.
 
-| Setting | Default |
-|---|---|
-| `contracts` | `contracts/*.yml` |
-| `raw_output` | `models/raw` |
-| `staging_output` | `models/staging` |
+Staging generation is skipped for contracts with no columns declared;
+raw-only contracts are supported. Each source table is introspected
+once per run, even when both layers use it.
 
-Staging generation is skipped for contracts with no columns declared; raw-only contracts are supported.
+---
 
-**Examples:**
+### `modelgen check`
+
+Drift detection. Renders every contract in memory and compares the
+output against the files on disk. **Nothing is written.**
 
 ```bash
-# Generate everything
-modelgen run
+modelgen check [OPTIONS]
+```
 
-# With explicit config
-modelgen run --config path/to/.modelgen.yml
+| Option | Description |
+|---|---|
+| `-c`, `--config PATH` | Path to `.modelgen.yml`. Auto-discovered if not given. |
+| `--diff` | Print a unified diff for every drifted file |
+| `-v`, `--verbose` | Debug logging |
+| `--from-contract` | Skip BigQuery introspection for all contracts |
 
-# Preview output
-modelgen run --dry-run
+Because generation is deterministic — same contract, same source
+schema, byte-identical output — `check` turns that guarantee into a CI
+gate. Hand-edited models, stale regenerations, and contract changes
+that never got committed all fail loudly:
+
+```yaml
+# Gitea Actions / GitHub Actions step
+- name: Verify generated models match contracts
+  run: |
+    uv tool install wraith-modelgen
+    modelgen check --diff --from-contract
 ```
 
 ---
+
+## Exit codes
+
+Every command follows the same convention:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success — or, for `check`, everything in sync |
+| `1` | Contract, generation, introspection, or drift failure |
+| `2` | Usage error (bad flags, malformed table reference) |
 
 ---
 
 ## Offline / contract-only mode
 
-By default, `gen` and `run` introspect BigQuery at generation time to validate
-column references and populate the raw schema YAML. If no GCP Application
-Default Credentials are available, both commands automatically fall back to
-**contract-only mode** — no BigQuery connection is made.
+By default, `gen`, `run`, and `check` introspect BigQuery at generation
+time to validate column references and populate the raw schema YAML. If
+no GCP Application Default Credentials are available, they fall back to
+**contract-only mode** automatically — no BigQuery connection is made.
 
 You can also force contract-only mode explicitly with `--from-contract`:
 
 ```bash
 modelgen gen contract.yml --raw --from-contract
 modelgen run --from-contract
+modelgen check --from-contract
 ```
 
 **What changes in contract-only mode:**
@@ -153,9 +225,11 @@ modelgen run --from-contract
 | New source column notices | Yes | Not reported (source not queried) |
 | BQ credentials required | Yes | No |
 
-Contract-only mode is useful for local development without a service account,
-CI pipelines without GCP access, and bootstrapping a new contract before the
-source table exists.
+Contract-only mode is useful for local development without a service
+account, CI pipelines without GCP access, and bootstrapping a new
+contract before the source table exists. `modelgen new` is the one
+command that always needs credentials — it has nothing to work from
+but the live table.
 
 ---
 

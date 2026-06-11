@@ -26,22 +26,35 @@ uv tool install wraith-modelgen
 ## Quick start
 
 ```bash
-# Validate your contract
-modelgen validate contract.yml
+# Initialise the project layout (once)
+modelgen init
 
-# Generate the raw layer
+# Draft a contract from a live table — every column declared,
+# keys guessed and marked TODO
+modelgen new my-project.landing.user_signups
+
+# Lint it (offline, all findings in one pass)
+modelgen validate contracts/user_signups.yml
+
+# Generate both layers for every contract
+modelgen run
+
+# CI: prove committed models still match their contracts
+modelgen check --diff
+```
+
+Single-layer generation is also available when you need it:
+
+```bash
 modelgen gen contract.yml --raw -o ./models/raw
-
-# Generate the staging layer
 modelgen gen contract.yml --staging -o ./models/staging
-
-# Preview without writing
 modelgen gen contract.yml --raw --dry-run
 ```
 
 ## Credentials
 
-The `gen` command calls BigQuery to introspect the source table schema. It uses Application Default Credentials:
+`new`, `gen`, `run`, and `check` call BigQuery to introspect source
+table schemas, using Application Default Credentials:
 
 ```bash
 gcloud auth application-default login

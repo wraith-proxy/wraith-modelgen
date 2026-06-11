@@ -19,6 +19,7 @@ theme:
 nav:
   - Home: index.md
   - Usage: usage.md
+  - Lint Rules: linting.md
   - Technical Reference: reference.md
   - Architecture: architecture.md
   - Security Statement: security.md
