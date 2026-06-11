@@ -17,6 +17,13 @@ jobs:
         run: |
           uv sync --all-extras --all-groups
           uv run poe test-ci
+      - name: Lint Example Contracts
+        run: |
+          for contract in contracts/*.yml; do
+            uv run modelgen validate "$contract" --strict
+          done
+      - name: Verify Committed Models Match Contracts
+        run: uv run modelgen check --from-contract --diff
 
   auto-merge:
     needs: test-and-verify
