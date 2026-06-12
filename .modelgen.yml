@@ -1,0 +1,7 @@
+# modelgen dogfooding: the committed example models are generated from
+# the example contract. CI runs `modelgen check --from-contract` so the
+# example can never silently drift from what the tool actually emits.
+
+contracts: contracts/*.yml
+raw_output: models/raw
+staging_output: models/staging

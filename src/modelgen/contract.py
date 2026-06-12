@@ -227,10 +227,16 @@ class EventContract:
 
     @classmethod
     def from_file(cls, path: Path) -> EventContract:
+        return cls.from_text(path.read_text(), source=str(path))
+
+    @classmethod
+    def from_text(cls, text: str, source: str = "<string>") -> EventContract:
         try:
-            raw_yaml = yaml.safe_load(path.read_text())
+            raw_yaml = yaml.safe_load(text)
         except yaml.YAMLError as e:
-            raise ContractError(f"Failed to parse YAML at {path}: {e}") from e
+            raise ContractError(
+                f"Failed to parse YAML at {source}: {e}"
+            ) from e
 
         if not isinstance(raw_yaml, dict):
             raise ContractError(

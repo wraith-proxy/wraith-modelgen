@@ -67,6 +67,9 @@ class BigQueryIntrospector:
 
     def __init__(self, client=None):
         self._client = client
+        # run/check hit the same table once per layer; one API call is
+        # enough because generation is read-only within a process.
+        self._cache: dict[tuple[str, str, str], list[IntrospectedColumn]] = {}
 
     @property
     def client(self):
@@ -76,7 +79,7 @@ class BigQueryIntrospector:
             except ImportError as e:
                 raise IntrospectionError(
                     "google-cloud-bigquery is not installed. "
-                    "Install with: uv pip install 'modelgen'"
+                    "Install with: uv pip install 'wraith-modelgen'"
                 ) from e
             self._client = bigquery.Client()
         return self._client
@@ -84,6 +87,10 @@ class BigQueryIntrospector:
     def get_columns(
         self, project: str, dataset: str, table: str
     ) -> list[IntrospectedColumn]:
+        key = (project, dataset, table)
+        if key in self._cache:
+            return self._cache[key]
+
         fqn = f"{project}.{dataset}.{table}"
         logger.info("Introspecting %s", fqn)
 
@@ -99,6 +106,7 @@ class BigQueryIntrospector:
 
         columns = [_field_to_column(f) for f in t.schema]
         logger.info("Found %d columns in %s", len(columns), fqn)
+        self._cache[key] = columns
         return columns
 
 

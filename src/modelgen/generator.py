@@ -21,7 +21,7 @@ from modelgen.introspect import IntrospectedColumn, Introspector
 
 logger = logging.getLogger(__name__)
 
-_TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
+_TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
 class Layer(str, Enum):
@@ -333,6 +333,7 @@ class GenerationResult:
     introspected_columns: list[IntrospectedColumn] = dc_field(
         default_factory=list
     )
+    artefacts: dict[str, str] = dc_field(default_factory=dict)
 
 
 def generate(
@@ -369,4 +370,5 @@ def generate(
         written=written,
         new_source_columns=new_cols,
         introspected_columns=introspected,
+        artefacts=artefacts,
     )

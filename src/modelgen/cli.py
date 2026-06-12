@@ -6,6 +6,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -13,6 +14,7 @@ from modelgen import __version__
 from modelgen.contract import ContractError, EventContract
 from modelgen.generator import GenerationError, Layer, generate
 from modelgen.introspect import IntrospectionError
+from modelgen.lint import Finding, lint_contract
 
 app = typer.Typer(
     name="modelgen",
@@ -48,6 +50,19 @@ def _main(
     ),
 ) -> None:
     pass
+
+
+def _print_findings(findings: list[Finding]) -> None:
+    for f in findings:
+        colour = "red" if f.is_error else "yellow"
+        label = "error  " if f.is_error else "warning"
+        console.print(
+            f"[{colour}]{label}[/{colour}] [dim]{f.code}[/dim] {f.message}"
+        )
+
+
+def _lint_errors(event: EventContract) -> list[Finding]:
+    return [f for f in lint_contract(event) if f.is_error]
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -136,6 +151,16 @@ def gen(
         event = EventContract.from_file(contract)
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
+        raise typer.Exit(1)
+
+    lint_errs = _lint_errors(event)
+    if lint_errs:
+        _print_findings(lint_errs)
+        console.print(
+            f"[red]Contract failed lint with {len(lint_errs)}"
+            " error(s).[/red] Run [bold]modelgen validate[/bold]"
+            " for the full report."
+        )
         raise typer.Exit(1)
 
     from modelgen.introspect import (
@@ -236,24 +261,46 @@ def validate(
         exists=True,
         readable=True,
     ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Treat warnings as errors. For CI gates with standards.",
+    ),
 ):
     """
-    Validate a contract's YAML structure without connecting to BigQuery.
+    Validate a contract offline: structure first, then semantics.
 
-    Runs offline. Catches parse errors, missing fields, and bad values
-    before you spend a round-trip to BigQuery finding out.
+    Catches parse errors, missing fields, bad values, invalid BigQuery
+    types and strategies, duplicate or unsafe column declarations, and
+    staging configs that reference columns the model never selects —
+    all in one pass, before you spend a round-trip to BigQuery.
     """
     try:
         event = EventContract.from_file(contract)
-        console.print(
-            f"[green]OK[/green] [bold]{event.name}[/bold]\n"
-            f"  Source:   {event.source.fqn}\n"
-            f"  Key:      {', '.join(event.unique_key)}\n"
-            f"  Columns:  {len(event.staging.columns)} staging declared"
-        )
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
         raise typer.Exit(1)
+
+    findings = lint_contract(event)
+    _print_findings(findings)
+    errs = [f for f in findings if f.is_error]
+    warns = [f for f in findings if not f.is_error]
+
+    if errs or (strict and warns):
+        console.print(
+            f"[red]FAIL[/red] [bold]{event.name}[/bold]:"
+            f" {len(errs)} error(s), {len(warns)} warning(s)"
+            + (" [dim](--strict)[/dim]" if strict and not errs else "")
+        )
+        raise typer.Exit(1)
+
+    console.print(
+        f"[green]OK[/green] [bold]{event.name}[/bold]\n"
+        f"  Source:   {event.source.fqn}\n"
+        f"  Key:      {', '.join(event.unique_key)}\n"
+        f"  Columns:  {len(event.staging.columns)} staging declared\n"
+        f"  Warnings: {len(warns)}"
+    )
 
 
 @app.command()
@@ -373,6 +420,17 @@ def run(
             errors.append((contract_path.name, "parse", str(e)))
             continue
 
+        lint_errs = _lint_errors(event)
+        if lint_errs:
+            errors.append(
+                (
+                    contract_path.name,
+                    "lint",
+                    "; ".join(f.message for f in lint_errs),
+                )
+            )
+            continue
+
         introspector = (
             ContractIntrospector(event)
             if use_contract_introspection
@@ -449,8 +507,322 @@ def run(
 
     if errors:
         for name, layer_name, msg in errors:
-            console.print(f"[red]Error[/red] [{layer_name}] {name}: {msg}")
+            console.print(
+                f"[red]Error[/red] {escape(f'[{layer_name}] {name}: {msg}')}"
+            )
         raise typer.Exit(1)
+
+
+@app.command()
+def check(
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help=(
+            "Path to .modelgen.yml. Auto-discovered from cwd"
+            " upward if not given."
+        ),
+    ),
+    diff: bool = typer.Option(
+        False,
+        "--diff",
+        help="Print a unified diff for every drifted file.",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable debug logging."
+    ),
+    from_contract: bool = typer.Option(
+        False,
+        "--from-contract",
+        help=(
+            "Skip BigQuery introspection for all contracts. Types and"
+            " column list come from each contract's staging declarations."
+        ),
+    ),
+):
+    """
+    Verify committed models match what the contracts would generate.
+
+    Renders every contract in memory and compares the output against the
+    files on disk. Nothing is written. Exit code 0 means everything is
+    in sync; 1 means drift, missing files, or contract errors — wire it
+    straight into CI next to your linter.
+
+    \b
+    Typical CI step:
+      modelgen check --diff
+    """
+    _configure_logging(verbose)
+
+    from modelgen.config import ConfigError, ModelgenConfig
+    from modelgen.introspect import (
+        BigQueryIntrospector,
+        ContractIntrospector,
+        has_default_credentials,
+    )
+
+    try:
+        if config is not None:
+            cfg = ModelgenConfig.from_file(config)
+        else:
+            cfg = ModelgenConfig.discover(Path.cwd())
+    except ConfigError as e:
+        console.print(f"[red]Config error:[/red] {e}")
+        raise typer.Exit(1)
+
+    contract_files = cfg.contract_files()
+    if not contract_files:
+        console.print(
+            f"[yellow]No contracts found.[/yellow] "
+            f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
+            f" matched nothing in {cfg.root}"
+        )
+        raise typer.Exit(0)
+
+    use_contract_introspection = from_contract or not has_default_credentials()
+    if use_contract_introspection and not from_contract:
+        console.print(
+            "[yellow]No GCP credentials found."
+            " Checking against contracts only.[/yellow]"
+        )
+
+    shared_introspector = (
+        None if use_contract_introspection else BigQueryIntrospector()
+    )
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Contract")
+    table.add_column("Layer")
+    table.add_column("File")
+    table.add_column("Status")
+
+    errors: list[tuple[str, str, str]] = []
+    drifted: list[tuple[Path, str, str]] = []  # path, on_disk, expected
+    in_sync = 0
+
+    for contract_path in contract_files:
+        try:
+            event = EventContract.from_file(contract_path)
+        except ContractError as e:
+            errors.append((contract_path.name, "parse", str(e)))
+            continue
+
+        lint_errs = _lint_errors(event)
+        if lint_errs:
+            errors.append(
+                (
+                    contract_path.name,
+                    "lint",
+                    "; ".join(f.message for f in lint_errs),
+                )
+            )
+            continue
+
+        introspector = (
+            ContractIntrospector(event)
+            if use_contract_introspection
+            else shared_introspector
+        )
+        assert introspector is not None
+
+        try:
+            rel = contract_path.relative_to(cfg.root)
+        except ValueError:
+            rel = contract_path
+
+        layers: list[tuple[Layer, Path]] = [(Layer.RAW, cfg.raw_output)]
+        if event.staging.columns:
+            layers.append((Layer.STAGING, cfg.staging_output))
+
+        for layer, output_dir in layers:
+            try:
+                result = generate(
+                    contract=event,
+                    introspector=introspector,
+                    output_dir=output_dir,
+                    layer=layer,
+                    contract_path=str(rel),
+                    dry_run=True,
+                )
+            except (GenerationError, IntrospectionError) as e:
+                errors.append((contract_path.name, layer.value, str(e)))
+                continue
+
+            for filename, expected in result.artefacts.items():
+                dest = output_dir / filename
+                if not dest.exists():
+                    drifted.append((dest, "", expected))
+                    status = "[red]missing[/red]"
+                elif dest.read_text() != expected:
+                    drifted.append((dest, dest.read_text(), expected))
+                    status = "[red]drift[/red]"
+                else:
+                    in_sync += 1
+                    status = "[green]in sync[/green]"
+                table.add_row(
+                    contract_path.name, layer.value, filename, status
+                )
+
+    console.print(table)
+
+    if diff and drifted:
+        import difflib
+
+        for dest, on_disk, expected in drifted:
+            udiff = difflib.unified_diff(
+                on_disk.splitlines(keepends=True),
+                expected.splitlines(keepends=True),
+                fromfile=f"{dest} (on disk)",
+                tofile=f"{dest} (expected)",
+            )
+            console.print(f"[bold]--- {dest}[/bold]")
+            console.print("".join(udiff), markup=False, highlight=False)
+
+    if errors:
+        for name, layer_name, msg in errors:
+            console.print(
+                f"[red]Error[/red] {escape(f'[{layer_name}] {name}: {msg}')}"
+            )
+
+    if drifted or errors:
+        console.print(
+            f"[red]Drift detected:[/red] {len(drifted)} file(s) out of"
+            f" sync, {len(errors)} error(s)."
+            " Run [bold]modelgen run[/bold] and commit the result."
+        )
+        raise typer.Exit(1)
+
+    console.print(
+        f"[green]Everything in sync.[/green] {in_sync} file(s) match"
+        " their contracts."
+    )
+
+
+@app.command()
+def new(
+    table: str = typer.Argument(
+        ...,
+        help="Fully-qualified source table: project.dataset.table",
+    ),
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        "-n",
+        help="Event name for the contract. Default: derived from table.",
+    ),
+    output: Path = typer.Option(
+        Path("./contracts"),
+        "--output",
+        "-o",
+        help="Directory to write the contract into. Default: ./contracts.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing contract file.",
+    ),
+):
+    """
+    Bootstrap a draft contract from a live BigQuery table.
+
+    Introspects the table and writes a contract with every column
+    declared in staging, plus guessed unique_key and loaded_at_field
+    (marked TODO — confirm them before the contract goes live).
+    Requires GCP Application Default Credentials.
+    """
+    from modelgen.introspect import (
+        BigQueryIntrospector,
+        has_default_credentials,
+    )
+    from modelgen.scaffold import ScaffoldError, draft_contract
+
+    parts = table.split(".")
+    if len(parts) != 3 or not all(parts):
+        console.print(
+            f"[red]Expected project.dataset.table,"
+            f" got {escape(repr(table))}.[/red]"
+        )
+        raise typer.Exit(2)
+    project, dataset, table_name = parts
+
+    if not has_default_credentials():
+        console.print(
+            "[red]No GCP credentials found.[/red] modelgen new needs to"
+            " introspect the source table. Run:\n"
+            "  gcloud auth application-default login"
+        )
+        raise typer.Exit(1)
+
+    try:
+        columns = BigQueryIntrospector().get_columns(
+            project, dataset, table_name
+        )
+        yaml_text = draft_contract(
+            project, dataset, table_name, columns, name=name
+        )
+    except (IntrospectionError, ScaffoldError) as e:
+        console.print(f"[red]Could not draft contract:[/red] {e}")
+        raise typer.Exit(1)
+
+    event = EventContract.from_text(yaml_text)
+    dest = output / f"{event.name}.yml"
+    if dest.exists() and not force:
+        console.print(
+            f"[red]{dest} already exists.[/red] Pass --force to overwrite."
+        )
+        raise typer.Exit(1)
+    output.mkdir(parents=True, exist_ok=True)
+    dest.write_text(yaml_text)
+
+    console.print(
+        Panel(
+            f"[bold]Contract:[/bold]  {dest}\n"
+            f"[bold]Event:[/bold]     {event.name}\n"
+            f"[bold]Columns:[/bold]   {len(columns)} declared in staging\n"
+            f"[bold]Key:[/bold]       {', '.join(event.unique_key)}"
+            "  [dim](guessed)[/dim]\n"
+            f"[bold]Loaded at:[/bold] {event.loaded_at_field}"
+            "  [dim](guessed)[/dim]",
+            title="[bold green]👻 modelgen new[/bold green]",
+            subtitle="[dim]review the TODOs before generating[/dim]",
+            expand=False,
+        )
+    )
+    console.print(
+        "[dim]Next: confirm unique_key and loaded_at_field, add"
+        " descriptions, then run [bold]modelgen run[/bold].[/dim]"
+    )
+
+
+@app.command()
+def init(
+    directory: Path = typer.Argument(
+        Path("."),
+        help="Project root to initialise. Default: current directory.",
+    ),
+):
+    """
+    Initialise a modelgen project layout.
+
+    Creates .modelgen.yml with documented defaults plus the contracts/
+    and models/ directories. Safe to run in an existing repo; refuses
+    to touch a project that already has a .modelgen.yml.
+    """
+    from modelgen.scaffold import ScaffoldError, init_project
+
+    try:
+        created = init_project(directory)
+    except ScaffoldError as e:
+        console.print(f"[yellow]{e}[/yellow]")
+        raise typer.Exit(1)
+
+    for path in created:
+        console.print(f"[green]created[/green] {path}")
+    console.print(
+        "\n[dim]Next: [bold]modelgen new project.dataset.table[/bold]"
+        " to draft your first contract.[/dim]"
+    )
 
 
 def main():
