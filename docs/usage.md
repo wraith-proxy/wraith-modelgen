@@ -58,14 +58,15 @@ modelgen new PROJECT.DATASET.TABLE [OPTIONS]
 | `-o`, `--output PATH` | Directory for the contract (default: `./contracts`) |
 | `--force` | Overwrite an existing contract file |
 
-The draft declares **every** source column in staging with introspected
-types and descriptions, guesses `unique_key` (column names ending in
-`id`/`key`/`guid`/`uuid`) and `loaded_at_field` (temporal columns named
-like `received`/`loaded`/`created`/`*_at`), derives partition config
-from the loaded-at column, and pre-wires `[not_null, unique]` tests on
-the key. Guesses are marked `# TODO: confirm guess` — review them
-before the contract goes live. `RECORD` and `REPEATED` columns are
-declared without a cast.
+The draft is an ODCS v3.0.2 document. It declares **every** source column
+as a schema property with introspected types and descriptions, guesses the
+`primaryKey` (column names ending in `id`/`key`/`guid`/`uuid`) and
+`modelgenLoadedAtField` (temporal columns named like
+`received`/`loaded`/`created`/`*_at`), derives partition config from the
+loaded-at column, and pre-wires `required: true` + `unique: true`
+(→ `not_null`/`unique`) on the key. Guesses are flagged in the leading
+`# TODO` comment — review them before the contract goes live. `RECORD` and
+`REPEATED` columns are declared without a cast (`physicalType` omitted).
 
 ---
 
@@ -246,7 +247,7 @@ Source schemas change. wraith-modelgen validates the boundary and reports what b
 | Scenario | Behaviour |
 |---|---|
 | New column added to source | Does **not** appear until you regenerate. Run `modelgen run` (or `modelgen gen --raw`) to pick it up. Invisible in staging until added to the contract. |
-| Source column renamed | Update `unique_key` (if applicable) and the staging `source:` field. Staging name stays stable downstream. |
+| Source column renamed | Update the property's `physicalName` (the `primaryKey` property too, if applicable). The staging `name` stays stable downstream. |
 | Source column retyped | Update staging `type:`. The `CAST` absorbs it. If values are incompatible, BigQuery will fail at query time. |
 | Source column dropped | Generation fails if staging still references it. Update the contract or restore the source column. |
 

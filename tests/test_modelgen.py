@@ -39,52 +39,73 @@ SOURCE_DATASET = "landing"
 SOURCE_TABLE = "user_signups_raw"
 
 CONTRACT_YAML = """
-version: "1"
-event:
-  name: user_signed_up
-  description: "Fired when a user signs up."
-  unique_key: EVENT_ID
-  loaded_at_field: RECEIVED_AT
-  source:
+version: "1.0.0"
+kind: DataContract
+apiVersion: v3.0.2
+id: 11111111-1111-1111-1111-111111111111
+status: active
+name: user_signed_up
+description:
+  purpose: "Fired when a user signs up."
+servers:
+  - server: landing
+    type: bigquery
     project: my-project
     dataset: landing
-    table: user_signups_raw
-  raw:
-    dataset: raw
-    incremental_strategy: merge
-    dedup: true
-    partition_by:
-      field: RECEIVED_AT
-      data_type: timestamp
-      granularity: day
-    cluster_by: [USER_ID]
-  staging:
-    dataset: staging
-    incremental_strategy: merge
-    partition_by:
-      field: received_at
-      data_type: timestamp
-      granularity: day
-    columns:
-      - source: EVENT_ID
-        name: event_id
-        type: STRING
+schema:
+  - name: user_signed_up
+    physicalName: user_signups_raw
+    physicalType: table
+    description: "Fired when a user signs up."
+    customProperties:
+      - property: modelgenLoadedAtField
+        value: RECEIVED_AT
+      - property: modelgenRaw
+        value:
+          dataset: raw
+          incrementalStrategy: merge
+          dedup: true
+          partitionBy:
+            field: RECEIVED_AT
+            dataType: timestamp
+            granularity: day
+          clusterBy: [USER_ID]
+      - property: modelgenStaging
+        value:
+          dataset: staging
+          incrementalStrategy: merge
+          partitionBy:
+            field: received_at
+            dataType: timestamp
+            granularity: day
+    properties:
+      - name: event_id
+        physicalName: EVENT_ID
+        logicalType: string
+        physicalType: STRING
         description: "Unique event ID."
-        tests: [not_null, unique]
-      - source: USER_ID
-        name: user_id
-        type: STRING
-        tests: [not_null]
-      - source: SIGNUP_METHOD
-        name: signup_method
-        type: STRING
-        tests:
-          - accepted_values:
-              values: ["email", "google", "apple"]
-      - source: RECEIVED_AT
-        name: received_at
-        type: TIMESTAMP
-        tests: [not_null]
+        primaryKey: true
+        primaryKeyPosition: 1
+        required: true
+        unique: true
+      - name: user_id
+        physicalName: USER_ID
+        logicalType: string
+        physicalType: STRING
+        required: true
+      - name: signup_method
+        physicalName: SIGNUP_METHOD
+        logicalType: string
+        physicalType: STRING
+        quality:
+          - type: library
+            rule: validValues
+            validValues: ["email", "google", "apple"]
+      - name: received_at
+        physicalName: RECEIVED_AT
+        logicalType: date
+        physicalType: TIMESTAMP
+        required: true
 """
 
 
@@ -163,27 +184,44 @@ class TestContractParsing:
 
 
 class TestContractValidation:
-    def test_missing_source_raises(self, tmp_path):
+    def test_missing_server_raises(self, tmp_path):
+        # Valid ODCS skeleton but no bigquery server to source from.
+        yaml_text = CONTRACT_YAML.replace(
+            "servers:\n"
+            "  - server: landing\n"
+            "    type: bigquery\n"
+            "    project: my-project\n"
+            "    dataset: landing\n",
+            "",
+        )
+        p = tmp_path / "c.yml"
+        p.write_text(yaml_text)
+        with pytest.raises(ContractError, match="BigQuery server"):
+            EventContract.from_file(p)
+
+    def test_unsupported_api_version(self, tmp_path):
         p = tmp_path / "c.yml"
         p.write_text(
-            'version: "1"\nevent:\n  name: x\n'
-            "  unique_key: id\n  loaded_at_field: t\n"
+            CONTRACT_YAML.replace("apiVersion: v3.0.2", "apiVersion: v9.9.9")
         )
-        with pytest.raises(ContractError, match="required fields"):
+        with pytest.raises(ContractError, match="not valid ODCS"):
             EventContract.from_file(p)
 
-    def test_unsupported_version(self, tmp_path):
+    def test_missing_schema_block(self, tmp_path):
         p = tmp_path / "c.yml"
-        p.write_text('version: "99"\nevent: {}\n')
-        with pytest.raises(
-            ContractError, match="Unsupported contract version"
-        ):
+        p.write_text(
+            'version: "1.0.0"\nkind: DataContract\napiVersion: v3.0.2\n'
+            "id: x\nstatus: active\n"
+        )
+        with pytest.raises(ContractError, match="one schema object"):
             EventContract.from_file(p)
 
-    def test_missing_event_block(self, tmp_path):
+    def test_not_a_data_contract(self, tmp_path):
         p = tmp_path / "c.yml"
-        p.write_text('version: "1"\n')
-        with pytest.raises(ContractError, match="missing 'event'"):
+        p.write_text(
+            CONTRACT_YAML.replace("kind: DataContract", "kind: DataProduct")
+        )
+        with pytest.raises(ContractError):
             EventContract.from_file(p)
 
     def test_malformed_yaml(self, tmp_path):
@@ -195,8 +233,20 @@ class TestContractValidation:
 
 class TestCompositeKeys:
     def test_composite_unique_key(self, tmp_path):
+        # Mark USER_ID as the second primary-key column.
         yaml_text = CONTRACT_YAML.replace(
-            "unique_key: EVENT_ID", "unique_key: [EVENT_ID, USER_ID]"
+            "      - name: user_id\n"
+            "        physicalName: USER_ID\n"
+            "        logicalType: string\n"
+            "        physicalType: STRING\n"
+            "        required: true\n",
+            "      - name: user_id\n"
+            "        physicalName: USER_ID\n"
+            "        logicalType: string\n"
+            "        physicalType: STRING\n"
+            "        required: true\n"
+            "        primaryKey: true\n"
+            "        primaryKeyPosition: 2\n",
         )
         p = tmp_path / "c.yml"
         p.write_text(yaml_text)
@@ -456,16 +506,13 @@ class TestSchemaEvolution:
     def test_renamed_source_column_requires_contract_update(
         self, contract_file, tmp_path
     ):
-        """Source renamed EVENT_ID to EVENT_GUID. The contract MUST be updated
-        in lockstep: both the staging column reference AND the unique_key."""
+        """Source renamed EVENT_ID to EVENT_GUID. The contract is updated by
+        changing the property's physicalName; the staging name (and the
+        unique_key, derived from the primaryKey property) follow."""
         # Step 1: update contract to reflect rename
         yaml_text = contract_file.read_text()
         yaml_text = yaml_text.replace(
-            "unique_key: EVENT_ID", "unique_key: EVENT_GUID"
-        )
-        yaml_text = yaml_text.replace(
-            "      - source: EVENT_ID\n        name: event_id",
-            "      - source: EVENT_GUID\n        name: event_id",
+            "physicalName: EVENT_ID", "physicalName: EVENT_GUID"
         )
         contract_file.write_text(yaml_text)
         contract = EventContract.from_file(contract_file)
@@ -698,25 +745,16 @@ class TestErrors:
             generate(contract, empty, tmp_path, Layer.RAW)
 
     def test_empty_staging_contract_fails(self, tmp_path, introspector):
-        # Build a contract with an empty staging columns list
-        yaml_text = """
-version: "1"
-event:
-  name: empty_event
-  unique_key: EVENT_ID
-  loaded_at_field: RECEIVED_AT
-  source:
-    project: my-project
-    dataset: landing
-    table: user_signups_raw
-  raw:
-    dataset: raw
-  staging:
-    dataset: staging
-    columns: []
-"""
-        p = tmp_path / "empty.yml"
-        p.write_text(yaml_text)
-        contract = EventContract.from_file(p)
+        from modelgen.contract import RawConfig, SourceRef, StagingConfig
+
+        contract = EventContract(
+            name="empty_event",
+            description="",
+            unique_key=["EVENT_ID"],
+            loaded_at_field="RECEIVED_AT",
+            source=SourceRef("my-project", "landing", "user_signups_raw"),
+            raw=RawConfig(),
+            staging=StagingConfig(columns=[]),
+        )
         with pytest.raises(GenerationError, match="no columns"):
             generate(contract, introspector, tmp_path, Layer.STAGING)

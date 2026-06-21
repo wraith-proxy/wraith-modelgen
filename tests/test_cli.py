@@ -29,32 +29,50 @@ def strip_ansi(text: str) -> str:
 
 
 CONTRACT_YAML = """
-version: "1"
-event:
-  name: user_signed_up
-  description: "Fired when a user signs up."
-  unique_key: EVENT_ID
-  loaded_at_field: RECEIVED_AT
-  source:
+version: "1.0.0"
+kind: DataContract
+apiVersion: v3.0.2
+id: 11111111-1111-1111-1111-111111111111
+status: active
+name: user_signed_up
+description:
+  purpose: "Fired when a user signs up."
+servers:
+  - server: landing
+    type: bigquery
     project: my-project
     dataset: landing
-    table: user_signups_raw
-  raw:
-    dataset: raw
-    incremental_strategy: merge
-    dedup: true
-  staging:
-    dataset: staging
-    incremental_strategy: merge
-    columns:
-      - source: EVENT_ID
-        name: event_id
-        type: STRING
-        tests: [not_null, unique]
-      - source: RECEIVED_AT
-        name: received_at
-        type: TIMESTAMP
-        tests: [not_null]
+schema:
+  - name: user_signed_up
+    physicalName: user_signups_raw
+    physicalType: table
+    description: "Fired when a user signs up."
+    customProperties:
+      - property: modelgenLoadedAtField
+        value: RECEIVED_AT
+      - property: modelgenRaw
+        value:
+          dataset: raw
+          incrementalStrategy: merge
+          dedup: true
+      - property: modelgenStaging
+        value:
+          dataset: staging
+          incrementalStrategy: merge
+    properties:
+      - name: event_id
+        physicalName: EVENT_ID
+        logicalType: string
+        physicalType: STRING
+        primaryKey: true
+        primaryKeyPosition: 1
+        required: true
+        unique: true
+      - name: received_at
+        physicalName: RECEIVED_AT
+        logicalType: date
+        physicalType: TIMESTAMP
+        required: true
 """
 
 _FAKE_COLUMNS = [
@@ -309,8 +327,8 @@ class TestValidateCommand:
         p = tmp_path / "bad_strategy.yml"
         p.write_text(
             CONTRACT_YAML.replace(
-                "incremental_strategy: merge",
-                "incremental_strategy: mrege",
+                "incrementalStrategy: merge",
+                "incrementalStrategy: mrege",
             )
         )
         result = runner.invoke(app, ["validate", str(p)])
@@ -338,9 +356,9 @@ class TestValidateCommand:
         p = tmp_path / "multi.yml"
         p.write_text(
             CONTRACT_YAML.replace(
-                "incremental_strategy: merge",
-                "incremental_strategy: mrege",
-            ).replace("type: STRING", "type: VARCHAR")
+                "incrementalStrategy: merge",
+                "incrementalStrategy: mrege",
+            ).replace("physicalType: STRING", "physicalType: VARCHAR")
         )
         result = runner.invoke(app, ["validate", str(p)])
         output = strip_ansi(result.output)
@@ -354,8 +372,8 @@ class TestGenLintGate:
     ):
         contract_file.write_text(
             contract_file.read_text().replace(
-                "incremental_strategy: merge",
-                "incremental_strategy: mrege",
+                "incrementalStrategy: merge",
+                "incrementalStrategy: mrege",
             )
         )
         result = runner.invoke(
@@ -371,20 +389,44 @@ class TestGenLintGate:
 # ---------------------------------------------------------------------------
 
 _RAW_ONLY_CONTRACT = """\
-version: "1"
-event:
-  name: raw_only_event
-  unique_key: EVENT_ID
-  loaded_at_field: RECEIVED_AT
-  source:
+version: "1.0.0"
+kind: DataContract
+apiVersion: v3.0.2
+id: 22222222-2222-2222-2222-222222222222
+status: active
+name: raw_only_event
+servers:
+  - server: landing
+    type: bigquery
     project: my-project
     dataset: landing
-    table: user_signups_raw
-  raw:
-    dataset: raw
-  staging:
-    dataset: staging
-    columns: []
+schema:
+  - name: raw_only_event
+    physicalName: user_signups_raw
+    physicalType: table
+    customProperties:
+      - property: modelgenLoadedAtField
+        value: RECEIVED_AT
+      - property: modelgenRaw
+        value:
+          dataset: raw
+      - property: modelgenStaging
+        value:
+          generate: false
+    properties:
+      - name: event_id
+        physicalName: EVENT_ID
+        logicalType: string
+        physicalType: STRING
+        primaryKey: true
+        primaryKeyPosition: 1
+        required: true
+        unique: true
+      - name: received_at
+        physicalName: RECEIVED_AT
+        logicalType: date
+        physicalType: TIMESTAMP
+        required: true
 """
 
 
@@ -464,8 +506,8 @@ class TestRunCommand:
         (tmp_path / "contracts").mkdir()
         (tmp_path / "contracts" / "bad.yml").write_text(
             CONTRACT_YAML.replace(
-                "incremental_strategy: merge",
-                "incremental_strategy: mrege",
+                "incrementalStrategy: merge",
+                "incrementalStrategy: mrege",
             )
         )
         cfg = tmp_path / ".modelgen.yml"
@@ -562,8 +604,8 @@ class TestCheckCommand:
         (tmp_path / "contracts").mkdir()
         (tmp_path / "contracts" / "bad.yml").write_text(
             CONTRACT_YAML.replace(
-                "incremental_strategy: merge",
-                "incremental_strategy: mrege",
+                "incrementalStrategy: merge",
+                "incrementalStrategy: mrege",
             )
         )
         cfg = tmp_path / ".modelgen.yml"

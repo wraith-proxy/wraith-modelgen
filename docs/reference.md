@@ -2,116 +2,107 @@
 
 ## Contract structure
 
-A contract is a YAML file. It has one event. The event has a source, a raw layer config, and a staging layer config.
+A contract is an [Open Data Contract Standard (ODCS) v3.0.2](https://github.com/bitol-io/open-data-contract-standard) YAML document, validated against the bundled ODCS JSON schema. It describes exactly **one** table: a BigQuery `server` (source project + dataset), one `schema` object (the source table), and its `properties` (the staging columns). modelgen's BigQuery/dbt specifics live in `customProperties`.
 
 ```mermaid
 classDiagram
-    class Contract {
-        version: "1"
-    }
-    class EventConfig {
+    class DataContract {
+        version: string
+        kind: "DataContract"
+        apiVersion: "v3.0.2"
+        id: string
+        status: string
         name: string
-        description: string
-        unique_key: string | list~string~
-        loaded_at_field: string
     }
-    class SourceConfig {
+    class Server {
+        type: "bigquery"
         project: string
         dataset: string
-        table: string
     }
-    class RawConfig {
-        dataset: string
-        incremental_strategy: string
-        dedup: bool
-        cluster_by: list~string~
-    }
-    class PartitionConfig {
-        field: string
-        data_type: string
-        granularity: string
-    }
-    class StagingConfig {
-        dataset: string
-        incremental_strategy: string
-    }
-    class ColumnConfig {
-        source: string
+    class SchemaObject {
         name: string
-        type: string
+        physicalName: string
+        physicalType: "table"
         description: string
-        tests: list~string~
+    }
+    class Property {
+        name: string
+        physicalName: string
+        physicalType: string
+        primaryKey: bool
+        primaryKeyPosition: int
+        required: bool
+        unique: bool
+        quality: list
+    }
+    class modelgenCustomProps {
+        modelgenLoadedAtField: string
+        modelgenRaw: object
+        modelgenStaging: object
     }
 
-    Contract --> EventConfig : event
-    EventConfig --> SourceConfig : source
-    EventConfig --> RawConfig : raw
-    EventConfig --> StagingConfig : staging
-    RawConfig --> PartitionConfig : partition_by
-    StagingConfig --> PartitionConfig : partition_by
-    StagingConfig "1" --> "0..*" ColumnConfig : columns
+    DataContract "1" --> "1..*" Server : servers
+    DataContract "1" --> "1" SchemaObject : schema
+    SchemaObject "1" --> "1..*" Property : properties
+    SchemaObject --> modelgenCustomProps : customProperties
 ```
 
 ---
 
 ## Contract schema
 
-### Top-level
+### Top-level (ODCS)
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `version` | string | yes | Must be `"1"` |
-| `event` | mapping | yes | The event/entity definition |
+| `version` | string | yes | Contract version (semver) |
+| `kind` | string | yes | Must be `DataContract` |
+| `apiVersion` | string | yes | ODCS version; modelgen targets `v3.0.2` |
+| `id` | string | yes | Unique contract id (e.g. a UUID) |
+| `status` | string | yes | e.g. `active`, `draft` |
+| `name` | string | no | Data product name |
+| `servers` | list | yes | Must include one `type: bigquery` server |
+| `schema` | list | yes | Exactly one schema object (the source table) |
 
-### `event`
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | yes | Event name, used in model filenames (`raw__<name>`, `stg__<name>`) |
-| `description` | string | no | Human-readable description |
-| `unique_key` | string or list | yes | Source column(s) that uniquely identify a row |
-| `loaded_at_field` | string | yes | Source timestamp column used for incremental filtering |
-| `source` | mapping | yes | BigQuery source reference |
-| `raw` | mapping | no | Raw layer config (defaults apply) |
-| `staging` | mapping | yes | Staging layer config |
-
-### `source`
+### `servers[]` (the `bigquery` entry)
 
 | Field | Required | Description |
 |---|---|---|
+| `type` | yes | Must be `bigquery` |
 | `project` | yes | GCP project ID |
 | `dataset` | yes | BigQuery dataset |
-| `table` | yes | BigQuery table |
 
-### `raw`
-
-| Field | Default | Description |
-|---|---|---|
-| `dataset` | `raw` | Target dataset |
-| `incremental_strategy` | `merge` | dbt incremental strategy |
-| `dedup` | `false` | Deduplicate via `row_number()` partitioned by `unique_key` |
-| `partition_by` | none | Partition config: `field`, `data_type`, `granularity` |
-| `cluster_by` | `[]` | Cluster columns (source-side names) |
-
-### `staging`
-
-| Field | Default | Description |
-|---|---|---|
-| `dataset` | `staging` | Target dataset |
-| `incremental_strategy` | `merge` | dbt incremental strategy |
-| `partition_by` | none | Partition config using staging-side column names: `field`, `data_type`, `granularity` |
-| `cluster_by` | `[]` | Cluster columns (staging-side names) |
-| `columns` | `[]` | Declared columns (see below). Empty list = raw-only contract. |
-
-### `staging.columns[]`
+### `schema[0]` (the source table)
 
 | Field | Required | Description |
 |---|---|---|
-| `source` | yes | Column name in raw / source schema |
-| `name` | no | Column name in staging (defaults to `source.lower()`) |
-| `type` | no | BigQuery target type for `CAST`, e.g. `STRING`, `TIMESTAMP`, `INT64` |
+| `name` | yes | Entity name → model filenames (`raw__<name>`, `stg__<name>`) |
+| `physicalName` | yes | Source table name |
+| `physicalType` | no | `table` |
+| `description` | no | Human-readable description |
+| `properties` | yes | Staging columns (see below) |
+| `customProperties` | yes | modelgen dbt/layer config (see below) |
+
+### `schema[0].properties[]` (staging columns)
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Column name in staging (consumer-facing) |
+| `physicalName` | no | Source column name (defaults to `name`) |
+| `physicalType` | no | BigQuery `CAST` target, e.g. `STRING`, `TIMESTAMP`, `INT64` |
 | `description` | no | Column description (written to `.yml`) |
-| `tests` | no | dbt tests: `not_null`, `unique`, `accepted_values`, etc. |
+| `primaryKey` / `primaryKeyPosition` | no | Marks a `unique_key` column (uses source names, ordered by position) |
+| `required` | no | → `not_null` test |
+| `unique` | no | → `unique` test |
+| `quality` | no | `rule: validValues` + `validValues: [...]` → `accepted_values` test |
+
+### `schema[0].customProperties` (modelgen config)
+
+| `property` | Value | Description |
+|---|---|---|
+| `modelgenLoadedAtField` | string | Source timestamp column for incremental filtering |
+| `modelgenRaw` | object | Raw layer config: `dataset`, `incrementalStrategy`, `dedup`, `partitionBy {field, dataType, granularity}`, `clusterBy` |
+| `modelgenStaging` | object | Staging layer config: same keys as `modelgenRaw` minus `dedup`, plus `generate: false` for a raw-only contract |
 
 ---
 
