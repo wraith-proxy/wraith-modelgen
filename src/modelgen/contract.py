@@ -1,50 +1,62 @@
 """
 Data contract schema and parsing.
 
-The contract is the source of truth. Source teams maintain it as part of
-their release process. modelgen propagates contract changes to dbt models;
-downstream FDPs see a stable interface because staging absorbs the drift.
+Contracts are Open Data Contract Standard (ODCS) v3.0.2 documents. Source
+teams maintain them as part of their release process. modelgen propagates
+contract changes to dbt models; downstream FDPs see a stable interface
+because staging absorbs the drift.
+
+ODCS is a general standard; modelgen reads the subset it needs and carries
+its BigQuery/dbt specifics in ODCS `customProperties`:
+
+  schema[].name              -> event name (dbt model stem)
+  schema[].physicalName      -> source table
+  servers[bigquery]          -> source project + dataset
+  schema[].properties[]      -> staging columns
+    property.name            -> staging (consumer-facing) column name
+    property.physicalName    -> source column name
+    property.physicalType    -> BigQuery type to cast to
+    property.primaryKey      -> contributes to unique_key (source names)
+    property.required        -> not_null test
+    property.unique          -> unique test
+    property.logicalTypeOptions.validValues -> accepted_values test
+  schema[].customProperties  -> modelgenLoadedAtField, modelgenRaw,
+                                modelgenStaging (dbt/layer config)
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import yaml
 
-SUPPORTED_CONTRACT_VERSIONS = {"1"}
+ODCS_API_VERSION = "v3.0.2"
+_SCHEMA_PATH = (
+    Path(__file__).parent / "schema" / "odcs-json-schema-v3.0.2.json"
+)
 
 
 class ContractError(ValueError):
     """Raised when a contract is malformed or references invalid state."""
 
 
+@lru_cache(maxsize=1)
+def _odcs_validator() -> jsonschema.protocols.Validator:
+    schema = json.loads(_SCHEMA_PATH.read_text())
+    cls = jsonschema.validators.validator_for(schema)
+    cls.check_schema(schema)
+    return cls(schema)
+
+
 @dataclass(frozen=True)
 class ColumnTest:
     name: str
     args: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_raw(cls, raw: Any) -> ColumnTest:
-        if isinstance(raw, str):
-            return cls(name=raw)
-        if isinstance(raw, dict):
-            if len(raw) != 1:
-                raise ContractError(
-                    "Test entry must have exactly one key, "
-                    f"got: {list(raw.keys())}"
-                )
-            name = str(next(iter(raw)))
-            args = raw[name] or {}
-            if not isinstance(args, dict):
-                raise ContractError(
-                    f"Test args for {name!r} must be a mapping, "
-                    f"got {type(args).__name__}"
-                )
-            return cls(name=name, args=args)
-        raise ContractError(f"Unrecognised test format: {raw!r}")
 
 
 @dataclass
@@ -72,15 +84,37 @@ class StagingColumn:
         return self.source != self.name
 
     @classmethod
-    def from_raw(cls, raw: dict) -> StagingColumn:
-        if "source" not in raw:
-            raise ContractError(f"Staging column missing 'source': {raw}")
+    def from_property(cls, prop: dict) -> StagingColumn:
+        """Build from an ODCS schema property.
+
+        physicalName is the source column; name is the consumer-facing
+        name. A property with neither is invalid.
+        """
+        name = prop.get("name", "")
+        source = prop.get("physicalName") or name
+        if not source:
+            raise ContractError(
+                f"Schema property missing 'name'/'physicalName': {prop}"
+            )
+        tests: list[ColumnTest] = []
+        if prop.get("required"):
+            tests.append(ColumnTest("not_null"))
+        if prop.get("unique"):
+            tests.append(ColumnTest("unique"))
+        for check in prop.get("quality") or []:
+            if check.get("rule") == "validValues" and "validValues" in check:
+                tests.append(
+                    ColumnTest(
+                        "accepted_values",
+                        {"values": check["validValues"]},
+                    )
+                )
         return cls(
-            source=raw["source"],
-            name=raw.get("name", ""),
-            type=raw.get("type", ""),
-            description=raw.get("description", ""),
-            tests=[ColumnTest.from_raw(t) for t in raw.get("tests", [])],
+            source=source,
+            name=name or source.lower(),
+            type=prop.get("physicalType", ""),
+            description=prop.get("description", ""),
+            tests=tests,
         )
 
 
@@ -107,16 +141,6 @@ class SourceRef:
     def fqn(self) -> str:
         return f"{self.project}.{self.dataset}.{self.table}"
 
-    @classmethod
-    def from_raw(cls, raw: dict) -> SourceRef:
-        if not raw:
-            raise ContractError("Contract missing 'source' block.")
-        return cls(
-            project=raw["project"],
-            dataset=raw["dataset"],
-            table=raw["table"],
-        )
-
 
 @dataclass(frozen=True)
 class PartitionConfig:
@@ -131,12 +155,19 @@ class PartitionConfig:
         if raw is None:
             return None
         if "field" not in raw:
-            raise ContractError("partition_by must specify a 'field'.")
+            raise ContractError("partitionBy must specify a 'field'.")
         return cls(
             field=raw["field"],
-            data_type=raw.get("data_type", "timestamp"),
+            data_type=raw.get("dataType", "timestamp"),
             granularity=raw.get("granularity", "day"),
         )
+
+
+def _cluster_by(raw: dict) -> list[str]:
+    cluster_by = raw.get("clusterBy", [])
+    if isinstance(cluster_by, str):
+        return [cluster_by]
+    return list(cluster_by)
 
 
 @dataclass
@@ -150,15 +181,12 @@ class RawConfig:
     @classmethod
     def from_raw(cls, raw: dict | None) -> RawConfig:
         raw = raw or {}
-        cluster_by = raw.get("cluster_by", [])
-        if isinstance(cluster_by, str):
-            cluster_by = [cluster_by]
         return cls(
             dataset=raw.get("dataset", "raw"),
-            incremental_strategy=raw.get("incremental_strategy", "merge"),
+            incremental_strategy=raw.get("incrementalStrategy", "merge"),
             dedup=raw.get("dedup", False),
-            partition_by=PartitionConfig.from_raw(raw.get("partition_by")),
-            cluster_by=cluster_by,
+            partition_by=PartitionConfig.from_raw(raw.get("partitionBy")),
+            cluster_by=_cluster_by(raw),
         )
 
 
@@ -171,32 +199,54 @@ class StagingConfig:
     cluster_by: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_raw(cls, raw: dict | None) -> StagingConfig:
+    def from_raw(
+        cls, raw: dict | None, columns: list[StagingColumn]
+    ) -> StagingConfig:
         raw = raw or {}
-        cluster_by = raw.get("cluster_by", [])
-        if isinstance(cluster_by, str):
-            cluster_by = [cluster_by]
+        # A contract can opt out of a staging model (raw-only) while still
+        # declaring its schema/key via properties.
+        if raw.get("generate") is False:
+            columns = []
         return cls(
             dataset=raw.get("dataset", "staging"),
-            incremental_strategy=raw.get("incremental_strategy", "merge"),
-            columns=[
-                StagingColumn.from_raw(c) for c in raw.get("columns", [])
-            ],
-            partition_by=PartitionConfig.from_raw(raw.get("partition_by")),
-            cluster_by=cluster_by,
+            incremental_strategy=raw.get("incrementalStrategy", "merge"),
+            columns=columns,
+            partition_by=PartitionConfig.from_raw(raw.get("partitionBy")),
+            cluster_by=_cluster_by(raw),
         )
 
 
-def _normalise_unique_key(raw: Any) -> list[str]:
-    if isinstance(raw, str):
-        return [raw]
-    if isinstance(raw, list) and all(isinstance(k, str) for k in raw):
-        if not raw:
-            raise ContractError("unique_key list cannot be empty.")
-        return [str(k) for k in raw]
-    raise ContractError(
-        f"unique_key must be a string or list of strings, got {raw!r}"
-    )
+def _unique_key_from_properties(props: list[dict]) -> list[str]:
+    """Source column names of primary-key properties, ordered by
+    primaryKeyPosition (then declaration order)."""
+    keyed = [p for p in props if p.get("primaryKey")]
+    keyed.sort(key=lambda p: p.get("primaryKeyPosition", 0))
+    keys = [p.get("physicalName") or p.get("name", "") for p in keyed]
+    if not keys:
+        raise ContractError(
+            "No primaryKey property found. Mark the key column(s) with"
+            " primaryKey: true — they become the dbt unique_key."
+        )
+    return keys
+
+
+def _custom_props(obj: dict) -> dict[str, Any]:
+    """Flatten an ODCS customProperties list into a dict."""
+    out: dict[str, Any] = {}
+    for cp in obj.get("customProperties") or []:
+        if "property" in cp:
+            out[cp["property"]] = cp.get("value")
+    return out
+
+
+def _bigquery_server(servers: list[dict]) -> dict:
+    bq = [s for s in servers if s.get("type") == "bigquery"]
+    if not bq:
+        raise ContractError(
+            "Contract has no BigQuery server. Add a servers entry with"
+            " type: bigquery, project, and dataset."
+        )
+    return bq[0]
 
 
 @dataclass
@@ -232,40 +282,71 @@ class EventContract:
     @classmethod
     def from_text(cls, text: str, source: str = "<string>") -> EventContract:
         try:
-            raw_yaml = yaml.safe_load(text)
+            doc = yaml.safe_load(text)
         except yaml.YAMLError as e:
             raise ContractError(
                 f"Failed to parse YAML at {source}: {e}"
             ) from e
 
-        if not isinstance(raw_yaml, dict):
+        if not isinstance(doc, dict):
             raise ContractError(
-                "Contract root must be a mapping, "
-                f"got {type(raw_yaml).__name__}"
+                f"Contract root must be a mapping, got {type(doc).__name__}"
             )
 
-        version = str(raw_yaml.get("version", ""))
-        if version not in SUPPORTED_CONTRACT_VERSIONS:
+        errors = sorted(
+            _odcs_validator().iter_errors(doc), key=lambda e: e.path
+        )
+        if errors:
+            first = errors[0]
+            loc = "/".join(str(p) for p in first.path) or "<root>"
             raise ContractError(
-                f"Unsupported contract version {version!r}. "
-                f"Supported: {sorted(SUPPORTED_CONTRACT_VERSIONS)}"
+                f"Contract at {source} is not valid ODCS"
+                f" ({len(errors)} error(s)). First at {loc}:"
+                f" {first.message}"
             )
 
-        event = raw_yaml.get("event")
-        if not isinstance(event, dict):
-            raise ContractError("Contract missing 'event' block.")
+        if doc.get("kind") != "DataContract":
+            raise ContractError(
+                f"kind must be 'DataContract', got {doc.get('kind')!r}."
+            )
 
-        required = ["name", "unique_key", "loaded_at_field", "source"]
-        missing = [k for k in required if k not in event]
-        if missing:
-            raise ContractError(f"event missing required fields: {missing}")
+        schemas = doc.get("schema") or []
+        if len(schemas) != 1:
+            raise ContractError(
+                "modelgen contracts describe exactly one table:"
+                f" expected one schema object, got {len(schemas)}."
+            )
+        obj = schemas[0]
+        props = obj.get("properties") or []
+
+        bq = _bigquery_server(doc.get("servers") or [])
+        table = obj.get("physicalName") or obj.get("name")
+        if not table:
+            raise ContractError(
+                "Schema object needs a physicalName (the source table)."
+            )
+
+        cfg = _custom_props(obj)
+        loaded_at = cfg.get("modelgenLoadedAtField")
+        if not loaded_at:
+            raise ContractError(
+                "Schema customProperties must set modelgenLoadedAtField"
+                " to the source column used for incremental loads."
+            )
 
         return cls(
-            name=event["name"],
-            description=event.get("description", ""),
-            unique_key=_normalise_unique_key(event["unique_key"]),
-            loaded_at_field=event["loaded_at_field"],
-            source=SourceRef.from_raw(event["source"]),
-            raw=RawConfig.from_raw(event.get("raw")),
-            staging=StagingConfig.from_raw(event.get("staging")),
+            name=obj["name"],
+            description=obj.get("description", ""),
+            unique_key=_unique_key_from_properties(props),
+            loaded_at_field=loaded_at,
+            source=SourceRef(
+                project=bq.get("project", ""),
+                dataset=bq.get("dataset", ""),
+                table=table,
+            ),
+            raw=RawConfig.from_raw(cfg.get("modelgenRaw")),
+            staging=StagingConfig.from_raw(
+                cfg.get("modelgenStaging"),
+                [StagingColumn.from_property(p) for p in props],
+            ),
         )

@@ -60,45 +60,62 @@ modelgen gen contract.yml --raw --dry-run  # preview without writing
 
 ## 📄 Contract anatomy
 
+Contracts are [Open Data Contract Standard (ODCS) v3.0.2](https://github.com/bitol-io/open-data-contract-standard) documents, validated against the bundled ODCS JSON schema. modelgen's BigQuery/dbt specifics ride in `customProperties`.
+
 ```yaml
-version: "1"
+version: "1.0.0"
+kind: DataContract
+apiVersion: v3.0.2
+id: 8b1f6c2e-5a3d-4e7a-9f21-3c4d5e6f7a8b
+status: active
+name: user_signed_up
 
-event:
-  name: user_signed_up                 # the entity
-  unique_key: EVENT_ID                 # SOURCE column name (composite: [a, b])
-  loaded_at_field: RECEIVED_AT         # SOURCE column name
-
-  source:
+servers:
+  - server: landing                    # source project + dataset
+    type: bigquery
     project: my-gcp-project
     dataset: landing
-    table: user_signups_raw
 
-  raw:
-    dataset: raw
-    incremental_strategy: merge
-    dedup: true                        # row_number() partition by unique_key
-    partition_by:
-      field: RECEIVED_AT
-      data_type: timestamp
-      granularity: day
-    cluster_by: [USER_ID]
+schema:
+  - name: user_signed_up               # the entity → dbt model stem
+    physicalName: user_signups_raw      # source table
+    physicalType: table
 
-  staging:
-    dataset: staging
-    incremental_strategy: merge
-    partition_by:
-      field: received_at               # staging-side name (post-rename)
-      data_type: timestamp
-      granularity: day
-    cluster_by: [user_id]
+    customProperties:
+      - property: modelgenLoadedAtField  # SOURCE column for incremental loads
+        value: RECEIVED_AT
+      - property: modelgenRaw
+        value:
+          dataset: raw
+          incrementalStrategy: merge
+          dedup: true                    # row_number() partition by primaryKey
+          partitionBy: { field: RECEIVED_AT, dataType: timestamp, granularity: day }
+          clusterBy: [USER_ID]
+      - property: modelgenStaging
+        value:
+          dataset: staging
+          incrementalStrategy: merge
+          partitionBy: { field: received_at, dataType: timestamp, granularity: day }
+          clusterBy: [user_id]
 
-    columns:
-      - source: EVENT_ID               # name in raw (== name in source)
-        name: event_id                 # name in staging
-        type: STRING                   # cast target
+    properties:
+      - name: event_id                  # staging (consumer-facing) name
+        physicalName: EVENT_ID          # source column name
+        logicalType: string
+        physicalType: STRING            # cast target
         description: "..."
-        tests: [not_null, unique]
+        primaryKey: true                # contributes to dbt unique_key
+        primaryKeyPosition: 1
+        required: true                  # → not_null test
+        unique: true                    # → unique test
+      # accepted_values → quality: [{ type: library, rule: validValues, validValues: [...] }]
 ```
+
+| dbt test | ODCS field |
+|---|---|
+| `not_null` | property `required: true` |
+| `unique` | property `unique: true` |
+| `accepted_values` | property `quality` with `rule: validValues` + `validValues: [...]` |
 
 ---
 
@@ -107,8 +124,8 @@ event:
 | Source change | What wraith-modelgen does | What you do |
 |---|---|---|
 | Adds a column | Does not appear until you regenerate (`modelgen run`). Invisible in staging until declared in the contract. | Regenerate, then add to staging when consumers need it. |
-| Renames a column | Validation fails: column not found in source. | Update the `source:` field on that column. Also `unique_key` / `loaded_at_field` if applicable. |
-| Retypes a column | Existing CAST in staging absorbs it (or fails loudly at query time if values are incompatible). | Update `type:` if the canonical type should change too. |
+| Renames a column | Validation fails: column not found in source. | Update the property's `physicalName`. The `modelgenLoadedAtField` too, if applicable. |
+| Retypes a column | Existing CAST in staging absorbs it (or fails loudly at query time if values are incompatible). | Update the property's `physicalType` if the canonical type should change too. |
 | Drops a column staging uses | Validation fails: column not found. | Either restore upstream or remove from staging contract. |
 
 Validation runs as part of `modelgen gen --staging`. If it passes, the generated staging model still presents the same contract to downstream consumers.

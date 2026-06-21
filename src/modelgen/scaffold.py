@@ -10,8 +10,12 @@ confirms the keys before the contract becomes load-bearing.
 from __future__ import annotations
 
 import re
+import uuid
 from pathlib import Path
 
+import yaml
+
+from modelgen.contract import ODCS_API_VERSION
 from modelgen.introspect import IntrospectedColumn
 
 _KEY_HINT = re.compile(r"(^|_)(id|key|guid|uuid)$", re.IGNORECASE)
@@ -25,6 +29,32 @@ _PARTITION_TYPE = {
     "DATETIME": "datetime",
     "DATE": "date",
 }
+
+# Best-effort BigQuery -> ODCS logicalType. ODCS logicalType is one of
+# string/date/number/integer/object/array/boolean.
+_LOGICAL_TYPE = {
+    "STRING": "string",
+    "BYTES": "string",
+    "INT64": "integer",
+    "INTEGER": "integer",
+    "NUMERIC": "number",
+    "BIGNUMERIC": "number",
+    "FLOAT64": "number",
+    "BOOL": "boolean",
+    "BOOLEAN": "boolean",
+    "TIMESTAMP": "date",
+    "DATETIME": "date",
+    "DATE": "date",
+    "TIME": "date",
+    "RECORD": "object",
+    "JSON": "object",
+}
+
+
+def _logical_type(col: IntrospectedColumn) -> str:
+    if col.mode == "REPEATED":
+        return "array"
+    return _LOGICAL_TYPE.get(col.field_type, "string")
 
 
 class ScaffoldError(ValueError):
@@ -55,22 +85,22 @@ def derive_event_name(table: str) -> str:
     return name
 
 
-def _quote(text: str) -> str:
-    return '"' + text.replace("\n", " ").replace('"', '\\"') + '"'
-
-
-def _column_block(col: IntrospectedColumn, unique_key: str) -> list[str]:
-    lines = [
-        f"      - source: {col.name}",
-        f"        name: {col.name.lower()}",
-    ]
+def _property(col: IntrospectedColumn, unique_key: str) -> dict:
+    prop: dict = {
+        "name": col.name.lower(),
+        "physicalName": col.name,
+        "logicalType": _logical_type(col),
+    }
     if col.field_type != "RECORD" and col.mode != "REPEATED":
-        lines.append(f"        type: {col.field_type}")
+        prop["physicalType"] = col.field_type
     if col.description:
-        lines.append(f"        description: {_quote(col.description)}")
+        prop["description"] = col.description
     if col.name == unique_key:
-        lines.append("        tests: [not_null, unique]")
-    return lines
+        prop["primaryKey"] = True
+        prop["primaryKeyPosition"] = 1
+        prop["required"] = True
+        prop["unique"] = True
+    return prop
 
 
 def draft_contract(
@@ -80,7 +110,7 @@ def draft_contract(
     columns: list[IntrospectedColumn],
     name: str | None = None,
 ) -> str:
-    """Render a first-draft contract YAML from an introspected schema."""
+    """Render a first-draft ODCS contract YAML from an introspected schema."""
     if not columns:
         raise ScaffoldError(
             f"Source table {project}.{dataset}.{table} has no columns."
@@ -90,53 +120,70 @@ def draft_contract(
     loaded_at = guess_loaded_at(columns)
     loaded_at_col = next(c for c in columns if c.name == loaded_at)
 
-    lines = [
-        'version: "1"',
-        "",
-        "event:",
-        f"  name: {event_name}",
-        f"  description: {_quote(f'TODO: what one {event_name} row means.')}",
-        f"  unique_key: {unique_key}  # TODO: confirm guess",
-        f"  loaded_at_field: {loaded_at}  # TODO: confirm guess",
-        "",
-        "  source:",
-        f"    project: {project}",
-        f"    dataset: {dataset}",
-        f"    table: {table}",
-        "",
-        "  raw:",
-        "    dataset: raw",
-        "    incremental_strategy: merge",
-        "    dedup: true",
-    ]
-
+    raw_cfg: dict = {
+        "dataset": "raw",
+        "incrementalStrategy": "merge",
+        "dedup": True,
+    }
+    staging_cfg: dict = {
+        "dataset": "staging",
+        "incrementalStrategy": "merge",
+    }
     partition_type = _PARTITION_TYPE.get(loaded_at_col.field_type)
     if partition_type:
-        lines += [
-            "    partition_by:",
-            f"      field: {loaded_at}",
-            f"      data_type: {partition_type}",
-            "      granularity: day",
-        ]
+        raw_cfg["partitionBy"] = {
+            "field": loaded_at,
+            "dataType": partition_type,
+            "granularity": "day",
+        }
+        staging_cfg["partitionBy"] = {
+            "field": loaded_at.lower(),
+            "dataType": partition_type,
+            "granularity": "day",
+        }
 
-    lines += [
-        "",
-        "  staging:",
-        "    dataset: staging",
-        "    incremental_strategy: merge",
-    ]
-    if partition_type:
-        lines += [
-            "    partition_by:",
-            f"      field: {loaded_at.lower()}",
-            f"      data_type: {partition_type}",
-            "      granularity: day",
-        ]
-    lines.append("    columns:")
-    for col in columns:
-        lines += _column_block(col, unique_key)
+    doc = {
+        "version": "1.0.0",
+        "kind": "DataContract",
+        "apiVersion": ODCS_API_VERSION,
+        "id": str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"{project}.{dataset}.{table}")
+        ),
+        "status": "draft",
+        "name": event_name,
+        "servers": [
+            {
+                "server": dataset,
+                "type": "bigquery",
+                "project": project,
+                "dataset": dataset,
+            }
+        ],
+        "schema": [
+            {
+                "name": event_name,
+                "physicalName": table,
+                "physicalType": "table",
+                "description": f"TODO: what one {event_name} row means.",
+                "customProperties": [
+                    {
+                        "property": "modelgenLoadedAtField",
+                        "value": loaded_at,
+                    },
+                    {"property": "modelgenRaw", "value": raw_cfg},
+                    {"property": "modelgenStaging", "value": staging_cfg},
+                ],
+                "properties": [_property(col, unique_key) for col in columns],
+            }
+        ],
+    }
 
-    return "\n".join(lines) + "\n"
+    header = (
+        f"# Draft ODCS contract for {project}.{dataset}.{table}.\n"
+        "# TODO: confirm the guessed primaryKey and modelgenLoadedAtField"
+        " before generating.\n"
+    )
+    return header + yaml.safe_dump(doc, sort_keys=False, width=88)
 
 
 _MODELGEN_YML = """\

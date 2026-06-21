@@ -67,8 +67,8 @@ flowchart TD
 | Source change | What happens | What you do |
 |---|---|---|
 | Adds a column | Flows into raw automatically. Invisible in staging. | Add to staging when consumers need it. |
-| Renames a column | Validation fails: column not found in source. | Update the `source:` field. Also `unique_key` / `loaded_at_field` if applicable. |
-| Retypes a column | Existing `CAST` absorbs it or fails loudly at query time. | Update `type:` if the canonical type changes. |
+| Renames a column | Validation fails: column not found in source. | Update the property's `physicalName`. Also `modelgenLoadedAtField` if applicable. |
+| Retypes a column | Existing `CAST` absorbs it or fails loudly at query time. | Update the property's `physicalType` if the canonical type changes. |
 | Drops a column staging uses | Validation fails: column not found. | Restore upstream or remove from staging contract. |
 
 ---

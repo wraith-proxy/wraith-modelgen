@@ -1,92 +1,116 @@
-# modelgen data contract
+# modelgen data contract — Open Data Contract Standard (ODCS) v3.0.2.
 # Source-of-truth for one event/entity. Source teams maintain this as part of
-# their release process. Schema evolution rules:
-#   - NEW source columns: appear in raw automatically (select *). Invisible in
-#     staging until added to the contract. Downstream never sees what it doesn't
-#     yet know to consume.
-#   - RENAMED source column: update both `unique_key` (if applicable) and the
-#     staging column's `source:` field. Staging name stays stable downstream.
-#   - RETYPED source column: update the staging column's `type:` field. The
-#     CAST in staging absorbs the change.
+# their release process.
 #
-# Naming convention: `unique_key` and `loaded_at_field` reference SOURCE column
-# names (whatever case the source uses). Staging columns declare the consumer-
-# facing name separately.
+# modelgen reads the ODCS subset it needs and carries its BigQuery/dbt
+# specifics in customProperties:
+#   - property.physicalName  = the SOURCE column name (whatever case the
+#                              source uses). property.name = the stable,
+#                              consumer-facing staging name.
+#   - property.physicalType  = the BigQuery type staging casts to.
+#   - property.primaryKey    = contributes to the dbt unique_key (source names).
+#   - required/unique/validValues map to dbt not_null/unique/accepted_values.
+#   - schema.customProperties carries modelgenLoadedAtField + the raw/staging
+#     dbt layer config (dataset, incremental strategy, partitioning, dedup).
+#
+# Schema evolution:
+#   - NEW source columns: appear in raw automatically. Invisible in staging
+#     until added here as a property.
+#   - RENAMED source column: update the property's physicalName (and the
+#     primaryKey property if applicable). The staging `name` stays stable.
+#   - RETYPED source column: update the property's physicalType. The staging
+#     CAST absorbs the change.
 #
 # Generate:
 #   modelgen gen contract.yml --raw     -o ./models/raw
 #   modelgen gen contract.yml --staging -o ./models/staging
 
-version: "1"
+version: "1.0.0"
+kind: DataContract
+apiVersion: v3.0.2
+id: 8b1f6c2e-5a3d-4e7a-9f21-3c4d5e6f7a8b
+status: active
+name: user_signed_up
 
-event:
-  name: user_signed_up
-  description: "Fired when a user completes the signup flow."
+description:
+  purpose: "Fired when a user completes the signup flow."
 
-  unique_key: EVENT_ID                 # source column. Composite: [EVENT_ID, USER_ID]
-  loaded_at_field: RECEIVED_AT         # source column
-
-  source:
+servers:
+  - server: landing
+    type: bigquery
     project: my-gcp-project
     dataset: landing
-    table: user_signups_raw
 
-  # Origin Data Product. Owned by the source team. Pass-through with optional
-  # dedup. Schema mirrors source; new columns flow through automatically.
-  raw:
-    dataset: raw
-    incremental_strategy: merge
-    dedup: true
-    partition_by:
-      field: RECEIVED_AT
-      data_type: timestamp
-      granularity: day
-    cluster_by: [USER_ID]
+schema:
+  - name: user_signed_up
+    physicalName: user_signups_raw
+    physicalType: table
+    description: "Fired when a user completes the signup flow."
 
-  # Consumption Data Product. Stable contract for downstream FDPs.
-  # Renames and casts here absorb upstream schema drift.
-  staging:
-    dataset: staging
-    incremental_strategy: merge
-    partition_by:
-      field: received_at               # staging-side name (post-rename)
-      data_type: timestamp
-      granularity: day
-    cluster_by: [user_id]
+    # modelgen-specific dbt/layer config. Origin Data Product (raw) is a
+    # pass-through with optional dedup; Consumption Data Product (staging) is
+    # the stable contract whose renames and casts absorb upstream drift.
+    customProperties:
+      - property: modelgenLoadedAtField
+        value: RECEIVED_AT
+      - property: modelgenRaw
+        value:
+          dataset: raw
+          incrementalStrategy: merge
+          dedup: true
+          partitionBy:
+            field: RECEIVED_AT
+            dataType: timestamp
+            granularity: day
+          clusterBy: [USER_ID]
+      - property: modelgenStaging
+        value:
+          dataset: staging
+          incrementalStrategy: merge
+          partitionBy:
+            field: received_at
+            dataType: timestamp
+            granularity: day
+          clusterBy: [user_id]
 
-    columns:
-      - source: EVENT_ID
-        name: event_id
-        type: STRING
+    properties:
+      - name: event_id
+        physicalName: EVENT_ID
+        logicalType: string
+        physicalType: STRING
         description: "Unique identifier for this event."
-        tests:
-          - not_null
-          - unique
+        primaryKey: true
+        primaryKeyPosition: 1
+        required: true
+        unique: true
 
-      - source: USER_ID
-        name: user_id
-        type: STRING
+      - name: user_id
+        physicalName: USER_ID
+        logicalType: string
+        physicalType: STRING
         description: "The ID of the user who signed up."
-        tests:
-          - not_null
+        required: true
 
-      - source: SIGNUP_METHOD
-        name: signup_method
-        type: STRING
+      - name: signup_method
+        physicalName: SIGNUP_METHOD
+        logicalType: string
+        physicalType: STRING
         description: "How the user signed up."
-        tests:
-          - not_null
-          - accepted_values:
-              values: ["email", "google", "apple"]
+        required: true
+        quality:
+          - type: library
+            rule: validValues
+            validValues: ["email", "google", "apple"]
 
-      - source: RECEIVED_AT
-        name: received_at
-        type: TIMESTAMP
+      - name: received_at
+        physicalName: RECEIVED_AT
+        logicalType: date
+        physicalType: TIMESTAMP
         description: "When the event was received by the ingestion pipeline."
-        tests:
-          - not_null
+        required: true
 
-      - source: COUNTRY_CODE
-        name: country_code
-        type: STRING
+      - name: country_code
+        physicalName: COUNTRY_CODE
+        logicalType: string
+        physicalType: STRING
         description: "ISO 3166-1 alpha-2 country code."
