@@ -27,6 +27,10 @@ edit to fix each finding.
 | `invalid-loaded-at-field` | `modelgenLoadedAtField` is not a valid identifier |
 | `invalid-raw-dataset` / `invalid-staging-dataset` | `modelgenRaw.dataset` / `modelgenStaging.dataset` is not a valid BigQuery identifier |
 | `invalid-raw-strategy` / `invalid-staging-strategy` | `incrementalStrategy` is not one of `merge`, `insert_overwrite`, `microbatch` |
+| `invalid-staging-materialization` | `modelgenStaging.materialization` is not `snapshot` or `incremental` |
+| `snapshot-strategy-conflict` | A snapshot declares an `incrementalStrategy` other than `insert_overwrite`. A snapshot replaces whole `ds` partitions — drop the key and let it derive |
+| `snapshot-partition-not-ds` | A snapshot declares a `partitionBy.field` that isn't `ds`. Drop `partitionBy` (it derives) or switch to `materialization: incremental` |
+| `ds-column-reserved` | A property maps to the name `ds`, which a snapshot model generates for itself |
 | `invalid-raw-partition-field` / `invalid-staging-partition-field` | `partitionBy.field` is not a valid identifier |
 | `invalid-raw-partition-type` / `invalid-staging-partition-type` | `partitionBy.dataType` is not `timestamp`, `date`, `datetime`, or `int64` |
 | `invalid-raw-partition-granularity` / `invalid-staging-partition-granularity` | Granularity is not `hour`, `day`, `month`, or `year` |
@@ -39,6 +43,14 @@ edit to fix each finding.
 | `loaded-at-not-in-staging` | Same problem for `modelgenLoadedAtField` and the incremental filter |
 | `partition-field-not-in-staging` | `modelgenStaging.partitionBy.field` is not a declared property `name` (staging config uses post-rename names) |
 | `cluster-column-not-in-staging` | A `modelgenStaging.clusterBy` entry is not a declared property `name` |
+| `invalid-classification` | A property's `classification` is not `pii` or `psi` |
+| `classified-column-enumerated` | A classified property declares `validValues`. An enumerated column is a category, not a personal value: its ciphertext falls to frequency analysis, and `accepted_values` cannot match BYTES |
+| `subject-field-not-declared` | Properties are classified but `modelgenSubjectField` is unset, so no keyset can be resolved |
+| `subject-field-not-in-staging` | `modelgenSubjectField` is not a declared property, so the keystore join references a column the model never selects |
+| `subject-field-unclassified` | The subject column carries no `classification`, so the join key would be materialised in plaintext — the one column that must not be |
+| `cluster-column-classified` | `clusterBy` names a classified column. Encryption emits BYTES and BigQuery cannot cluster on BYTES |
+| `partition-field-classified` | `partitionBy.field` is classified. BigQuery partitions on date, timestamp, datetime or int64 only |
+| `loaded-at-classified` | `modelgenLoadedAtField` is classified while `materialization: incremental`. The high-water-mark filter would compare a timestamp against ciphertext. A load timestamp is pipeline metadata, not personal data |
 
 ## Warnings
 
@@ -46,6 +58,7 @@ edit to fix each finding.
 |---|---|
 | `missing-column-description` | A property has no `description`. Downstream consumers read these. |
 | `unique-key-untested` | The `primaryKey` property carries no tests. Consider `required: true` + `unique: true`. |
+| `subject-field-untested` | The subject column has no `not_null` test. A row whose subject has no keyset encrypts to NULL and nothing would surface it. Set `required: true`. |
 
 ## Strict mode
 

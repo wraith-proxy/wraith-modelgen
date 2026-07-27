@@ -17,6 +17,10 @@ Given a YAML data contract describing a BigQuery source table, `wraith-modelgen`
 
 Source schema changes are handled at the raw/staging boundary, not in your downstream models.
 
+Staging defaults to a **datestamped daily snapshot**: `insert_overwrite` partitioned on a generated `ds` column, one full copy of the dimension per day. History is `where ds = '<date>'`, and any date backfills in parallel with the same SQL (`dbt run --vars '{ds: 2026-07-27}'`). Set `materialization: incremental` on `modelgenStaging` to opt back into a high-water-mark load.
+
+A property marked `classification: pii` or `psi` is **encrypted into staging** and never materialised in plaintext. The subject column is encrypted deterministically so joins survive erasure; right to be forgotten is a single DELETE from the keystore. See [Keystore & Erasure](bigquery/keystore.md).
+
 ## Install
 
 ```bash
@@ -61,6 +65,12 @@ gcloud auth application-default login
 ```
 
 Or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key file.
+
+All but `new` also run without credentials: pass `--from-contract` to
+generate from the contract's declared columns alone, which is what CI does.
+Without the flag they fall back to it automatically when no credentials are
+found. `new` always needs BigQuery — it has nothing to work from but the
+live table.
 
 ---
 

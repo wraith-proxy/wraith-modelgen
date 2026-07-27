@@ -58,7 +58,6 @@ schema:
       - property: modelgenStaging
         value:
           dataset: staging
-          incrementalStrategy: merge
     properties:
       - name: event_id
         physicalName: EVENT_ID

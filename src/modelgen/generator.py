@@ -8,20 +8,57 @@ generated files against committed ones to catch contract drift.
 
 from __future__ import annotations
 
+import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
 from enum import Enum
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from modelgen.contract import EventContract, StagingColumn
+from modelgen.contract import ColumnTest, EventContract, StagingColumn
 from modelgen.introspect import IntrospectedColumn, Introspector
 
 logger = logging.getLogger(__name__)
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
+
+# The snapshot stamp. dbt's run date by default; the orchestrator overrides
+# it with --vars '{ds: YYYY-MM-DD}' so one SQL file serves the daily run and
+# any number of parallel backfills.
+_DS_VALUE = 'date(\'{{ var("ds", run_started_at.strftime("%Y-%m-%d")) }}\')'
+_DS_COLUMN = f"{_DS_VALUE} as ds"
+_DS_TEST_WHERE = f"ds = {_DS_VALUE}"
+
+# The keystore is a convention, not a contract: one per warehouse, declared
+# as a dbt source. It is deliberately not a modelgen model — a snapshot of
+# it would be a second copy of the thing whose deletion is the erasure.
+_KEYSTORE = "{{ source('keystore', 'subject_keys') }}"
+_AAD = "_modelgen_aad"
+
+# Encryption returns BYTES whatever went in, so the contract's physicalType
+# describes the plaintext and the emitted column is BYTES.
+_CIPHERTEXT_TYPE = "BYTES"
+
+# LEFT JOIN, not INNER: a subject with no keyset must not silently vanish
+# from staging. The row survives with NULL ciphertext, which the not_null
+# test on the subject column turns into a visible failure.
+_KEYSTORE_CTE = """,
+
+keyed as (
+
+    select
+        source.*,
+        keystore.kek_resource_name,
+        keystore.wrapped_dek_deterministic,
+        keystore.wrapped_dek_randomised,
+        cast(keystore.subject_id as bytes) as {aad}
+    from source
+    left join {keystore} as keystore
+        on keystore.subject_id = source.{subject}
+
+)"""
 
 
 class Layer(str, Enum):
@@ -41,6 +78,9 @@ def _make_env() -> Environment:
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
+    # Jinja's tojson is HTML-safe and escapes quotes to \uXXXX, which is
+    # unreadable in a generated file a human reviews in a diff.
+    env.filters["json"] = json.dumps
     return env
 
 
@@ -124,8 +164,65 @@ def _validate_keys_present(
         )
 
 
-def _transform_expr(col: StagingColumn) -> str:
-    """Build the SELECT expression for one staging column."""
+def _yml_column(col: StagingColumn, snapshot: bool) -> StagingColumn:
+    """Rewrite a contract column into what the schema.yml should declare.
+
+    A snapshot's grain is (key, ds), so a bare unique test fails as soon as
+    a second partition lands — scope it to the partition this run writes,
+    as a literal so BigQuery prunes to it instead of scanning history. A
+    classified column arrives as BYTES, whatever its plaintext type was.
+    """
+    tests = col.tests
+    if snapshot:
+        tests = [
+            ColumnTest("unique", {"config": {"where": _DS_TEST_WHERE}})
+            if t.name == "unique"
+            else t
+            for t in tests
+        ]
+    if col.classification:
+        return replace(col, type=_CIPHERTEXT_TYPE, tests=tests)
+    return replace(col, tests=tests)
+
+
+def _plaintext_expr(col: StagingColumn) -> str:
+    """The value shaped for AEAD, which takes STRING or BYTES.
+
+    The declared cast still runs, so the plaintext is the contract's type
+    before it is stringified and a reader gets back what the contract
+    promised. A column already cast to STRING needs only the one cast.
+    """
+    if col.type.strip().upper() == "STRING":
+        return f"cast({col.source} as STRING)"
+    if col.needs_cast:
+        return f"cast(cast({col.source} as {col.type}) as string)"
+    return f"cast({col.source} as string)"
+
+
+def _transform_expr(col: StagingColumn, subject_source: str = "") -> str:
+    """Build the SELECT expression for one staging column.
+
+    Classified columns are encrypted here, on the way into staging, and are
+    never materialised in plaintext anywhere downstream. The subject column
+    is encrypted deterministically so that joins, row counts and aggregates
+    survive the crypto-shred; everything else is randomised.
+    """
+    if col.classification:
+        deterministic = col.source == subject_source
+        fn = "deterministic_encrypt" if deterministic else "aead.encrypt"
+        keyset = (
+            "wrapped_dek_deterministic"
+            if deterministic
+            else "wrapped_dek_randomised"
+        )
+        return (
+            f"{fn}(\n"
+            f"        keys.keyset_chain("
+            f"kek_resource_name, {keyset}),\n"
+            f"        {_plaintext_expr(col)},\n"
+            f"        {_AAD}\n"
+            f"    ) as {col.name}"
+        )
     if col.needs_cast:
         return f"cast({col.source} as {col.type}) as {col.name}"
     if col.needs_rename:
@@ -218,36 +315,63 @@ def render_staging(
             new_cols,
         )
 
+    snapshot = contract.staging.is_snapshot
+    encrypts = contract.encrypts
     raw_cols = _join_cols(
         [c.source for c in contract.staging.columns], indent=8
     )
-    transformed_cols = _join_cols(
-        [_transform_expr(c) for c in contract.staging.columns],
-        indent=4,
-    )
+    exprs = [
+        _transform_expr(c, contract.subject_field)
+        for c in contract.staging.columns
+    ]
+    if snapshot:
+        exprs.append(_DS_COLUMN)
+    transformed_cols = _join_cols(exprs, indent=4)
 
     env = _make_env()
     staging_loaded_at = _staging_name_for(contract, contract.loaded_at_field)
     ctx = {
         "event": contract,
         "contract_path": contract_path,
+        "snapshot": snapshot,
+        "staging_columns": [
+            _yml_column(c, snapshot) for c in contract.staging.columns
+        ],
+        "keystore_cte": (
+            _KEYSTORE_CTE.format(
+                aad=_AAD,
+                keystore=_KEYSTORE,
+                subject=contract.subject_field,
+            )
+            if encrypts
+            else ""
+        ),
+        "select_from": "keyed" if encrypts else "source",
         "raw_cols": raw_cols,
         "transformed_cols": transformed_cols,
         "staging_unique_key_dbt": _staging_unique_key_dbt(contract),
         "staging_loaded_at_field": staging_loaded_at,
         "cluster_by_literal": _render_cluster_by(contract.staging.cluster_by),
         "dbt_config": _render_dbt_config(
-            unique_key_dbt=_staging_unique_key_dbt(contract),
+            unique_key_dbt=(
+                "" if snapshot else _staging_unique_key_dbt(contract)
+            ),
             schema=contract.staging.dataset,
             incremental_strategy=contract.staging.incremental_strategy,
             partition_by=contract.staging.partition_by,
             cluster_by=contract.staging.cluster_by,
         ),
-        # The upstream column is the raw layer's name (== source name).
-        # The same-model column is the staging name (post-rename).
-        "incremental_filter": _render_incremental_filter(
-            loaded_at_field=staging_loaded_at,
-            upstream_loaded_at_field=contract.loaded_at_field,
+        # A snapshot reads the whole dimension every run, so there is nothing
+        # to filter. Incremental reads from its own high-water mark: the
+        # upstream column is the raw layer's name (== source name), the
+        # same-model column is the staging name (post-rename).
+        "incremental_filter": (
+            ""
+            if snapshot
+            else _render_incremental_filter(
+                loaded_at_field=staging_loaded_at,
+                upstream_loaded_at_field=contract.loaded_at_field,
+            )
         ),
     }
     return {
@@ -289,9 +413,11 @@ def _render_dbt_config(
     lines = [
         "    materialized='incremental'",
         f"    incremental_strategy='{incremental_strategy}'",
-        f"    unique_key={unique_key_dbt}",
-        f"    schema='{schema}'",
     ]
+    # insert_overwrite replaces whole partitions and never reads unique_key.
+    if unique_key_dbt:
+        lines.append(f"    unique_key={unique_key_dbt}")
+    lines.append(f"    schema='{schema}'")
     if partition_by is not None:
         lines.append(
             f"    partition_by={{"

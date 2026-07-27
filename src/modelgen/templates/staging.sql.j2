@@ -6,6 +6,20 @@
   the contract; this layer absorbs upstream schema drift so FDPs don't break.
   New source columns flow into raw automatically but are only surfaced here
   once added to the contract.
+{% if snapshot %}
+
+  Datestamped daily snapshot: one full copy of the dimension per ds
+  partition. Query history with `where ds = '<date>'`. Backfill any date
+  in parallel with `dbt run --vars '{ds: YYYY-MM-DD}'`.
+{% endif %}
+{% if keystore_cte %}
+
+  Classified columns are encrypted here and never materialised in
+  plaintext downstream. Decrypt in a view or at query time only — a table
+  holding decrypted values is a second copy the crypto-shred cannot reach.
+  Subject column: deterministic, so joins survive the shred. Everything
+  else: randomised. Erasure is one DELETE from the keystore.
+{% endif %}
 
   Upstream: {{ event.raw_model_name }}
   Contract: {{ contract_path }}
@@ -18,11 +32,13 @@ with source as (
     select
         {{ raw_cols }}
     from {{ "{{ ref('" }}{{ event.raw_model_name }}{{ "') }}" }}
+{% if incremental_filter %}
 
 {{ incremental_filter }}
+{% endif %}
 
-)
+){{ keystore_cte }}
 
 select
     {{ transformed_cols }}
-from source
+from {{ select_from }}

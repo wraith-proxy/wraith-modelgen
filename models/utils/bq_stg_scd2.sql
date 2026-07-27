@@ -1,14 +1,19 @@
 -- =====================================================================
 -- BQ SCD2: Dynamic, parameterised — works for any table
--- Ticket:  TJP-20051
+-- Ticket:  TJP-20051, narrowed by TJP-27071
+--
+-- SCD2 is the carve-out, not the default. Staging materialises as a
+-- datestamped daily snapshot (ds); SCD2 is derived on top of that base
+-- when a regulated consumer needs an immutable who-changed-what-when
+-- trail. See docs/bigquery/scd2.md.
 --
 -- Two procedures:
 --
---   rebuild_scd2   — full CREATE OR REPLACE from source. Always correct.
---                    Use until scan cost justifies incremental.
+--   rebuild_scd2   — full CREATE OR REPLACE from the ds base. Always
+--                    correct, and cheap because the base is already
+--                    partitioned.
 --
---   merge_scd2     — MERGE close + INSERT new version. Incremental.
---                    Use when daily full rebuild cost is unacceptable.
+--   validate_scd2  — three quality checks on whatever SCD2 output exists.
 --
 -- Parameters control every identifier and column name.
 -- The SELECT projection (select_cols) is caller-supplied SQL — gives
@@ -17,7 +22,7 @@
 
 
 -- =====================================================================
--- PATTERN A: Full rebuild SCD2
+-- Full rebuild SCD2
 -- Drops and recreates target from source on every run.
 -- =====================================================================
 
@@ -126,84 +131,6 @@ END;
 --     'SCD Type 2 account dimension. One row per account per state period.',
 --     '("owner","data-engineering"),("layer","marts"),("scd_type","type-2")'
 -- );
-
-
--- =====================================================================
--- PATTERN B: Incremental MERGE SCD2
--- Step 1 — close previous open records for arriving entities.
--- Step 2 — insert new current records.
--- =====================================================================
-
-CREATE OR REPLACE PROCEDURE `project.utils.merge_scd2`(
-    source_project      STRING,
-    source_dataset      STRING,
-    source_table        STRING,
-    target_project      STRING,
-    target_dataset      STRING,
-    target_table        STRING,
-    unique_key          STRING,
-    event_ts_col        STRING,
-    incremental_col     STRING,   -- column to filter new records on (usually a date/ts)
-    incremental_value   DATE,     -- the date of new events to process
-    select_cols         STRING    -- projection SQL for INSERT — same shape as target
-)
-BEGIN
-    DECLARE merge_sql   STRING;
-    DECLARE insert_sql  STRING;
-
-    -- Step 1: Close previous current records where a new event has arrived
-    SET merge_sql = FORMAT("""
-        MERGE `%s.%s.%s` AS target
-        USING (
-            SELECT DISTINCT %s AS entity_key, %s AS new_valid_from
-            FROM `%s.%s.%s`
-            WHERE DATE(%s) = DATE(%T)
-        ) AS source
-        ON  target.%s    = source.entity_key
-        AND target.is_current = TRUE
-        WHEN MATCHED THEN UPDATE SET
-            valid_to   = source.new_valid_from,
-            is_current = FALSE
-    """,
-        target_project, target_dataset, target_table,
-        unique_key, event_ts_col,
-        source_project, source_dataset, source_table,
-        incremental_col, incremental_value,
-        unique_key
-    );
-
-    EXECUTE IMMEDIATE merge_sql;
-
-    -- Step 2: Insert new current records from today's events
-    SET insert_sql = FORMAT("""
-        INSERT INTO `%s.%s.%s`
-        SELECT
-            %s,
-            NULL                            AS valid_to,
-            TRUE                            AS is_current,
-            COALESCE(prev.record_version, 0) + 1 AS record_version,
-            CURRENT_TIMESTAMP()             AS _built_at
-        FROM `%s.%s.%s` AS src
-        LEFT JOIN (
-            SELECT %s, MAX(record_version) AS record_version
-            FROM   `%s.%s.%s`
-            GROUP BY %s
-        ) AS prev ON prev.%s = src.%s
-        WHERE DATE(src.%s) = DATE(%T)
-    """,
-        target_project, target_dataset, target_table,
-        select_cols,
-        source_project, source_dataset, source_table,
-        -- previous version subquery
-        unique_key,
-        target_project, target_dataset, target_table,
-        unique_key,
-        unique_key, unique_key,
-        incremental_col, incremental_value
-    );
-
-    EXECUTE IMMEDIATE insert_sql;
-END;
 
 
 -- =====================================================================

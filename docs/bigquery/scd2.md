@@ -2,9 +2,32 @@
 
 **Script:** `models/utils/bq_stg_scd2.sql`
 
+## Read This First: `ds` Is the Default
+
+Staging materialises as a **datestamped daily snapshot**. One full copy of
+the dimension per `ds` partition:
+
+```
+ds          account_id  status
+2024-06-19  ACC001      open
+2024-06-20  ACC001      closed
+2024-06-21  ACC001      closed
+```
+
+Historical query is `WHERE ds = '2024-06-20'`. No surrogate keys, no
+`BETWEEN` join that fails silently when someone forgets one half of it, and
+backfills run in parallel because day N does not depend on day N-1.
+
+SCD2 was a compression scheme for expensive storage. Storage is cheap;
+engineering time is not. **SCD2 is now the carve-out**, built on top of the
+`ds` base when a regulated consumer needs an immutable record of who changed
+what and when. See [Tooling Decisions](decisions.md).
+
 ## What SCD2 Is
 
-Slowly Changing Dimension Type 2. One row per entity per state period. History is preserved by appending a new row and closing the previous one with a `valid_to` timestamp.
+Slowly Changing Dimension Type 2. One row per entity per state period.
+History is preserved by appending a new row and closing the previous one
+with a `valid_to` timestamp.
 
 ```
 account_id  status  valid_from           valid_to             is_current
@@ -19,24 +42,25 @@ WHERE valid_from <= TIMESTAMP('2024-08-01')
   AND (valid_to > TIMESTAMP('2024-08-01') OR valid_to IS NULL)
 ```
 
-## SCD2 is OLAP, Not OLTP
+## `utils.rebuild_scd2` — Derive SCD2 From the Snapshots
 
-The MERGE that closes the previous record runs once per daily batch. Not thousands of times per second. BQ handles it. See [Architecture](architecture.md) for the OLTP vs OLAP distinction.
+`CREATE OR REPLACE TABLE ... AS SELECT` with a `LEAD()` window for
+`valid_to`. Full rebuild, every run. Always correct, simple to debug, and
+cheap because the `ds` base it reads is already partitioned.
 
-## Two Procedures
-
-### Pattern A: `utils.rebuild_scd2` — Full Rebuild
-
-`CREATE OR REPLACE TABLE ... AS SELECT` with `LEAD()` window for `valid_to`.
-
-**When to use:** default. Always correct. Simple to debug. Expensive only when table is very large (hundreds of millions of rows across years of history).
+There is no incremental MERGE variant. `merge_scd2` was removed in
+TJP-27071: it carried the failure modes — late-arriving data, dedup edge
+cases, MERGE bugs that only surface on a specific event sequence — and its
+own documentation already said not to reach for it until you had a measured
+cost problem you almost certainly never had.
 
 ```sql
 CALL `project.utils.rebuild_scd2`(
-    'my-project', 'staging',  'stg_account_events',  -- source
+    'my-project', 'staging',  'stg__account_events',  -- source (ds base)
     'my-project', 'marts',    'dim_accounts',          -- target
     'account_id_hashed',      -- unique key (PARTITION BY in window)
     'event_ts',               -- event timestamp (ORDER BY in window)
+    'event_type',             -- tiebreak for simultaneous events
     'valid_from',             -- partition column on target table
     'account_id_hashed',      -- cluster column on target table
     '''                       -- select_cols: caller-owned projection
@@ -55,43 +79,11 @@ CALL `project.utils.rebuild_scd2`(
 ```
 
 **How it works:**
+
 1. `source_events` CTE: applies `select_cols` projection to source table
 2. `scd2` CTE: `LEAD(event_ts)` over `PARTITION BY unique_key ORDER BY event_ts` → `valid_to`
 3. `QUALIFY ROW_NUMBER() = 1` deduplicates simultaneous events using caller-supplied `tiebreak_col` (pass `event_type` for alphabetical ordering — arbitrary but stable)
 4. `CREATE OR REPLACE TABLE` atomically replaces target
-
-### Pattern B: `utils.merge_scd2` — Incremental MERGE
-
-Two-step: close previous open record, insert new current record.
-
-**When to use:** when Pattern A full-scan cost is measurably unacceptable. Don't switch until you have a cost problem.
-
-```sql
-CALL `project.utils.merge_scd2`(
-    'my-project', 'staging',  'stg_account_events',
-    'my-project', 'marts',    'dim_accounts',
-    'account_id_hashed',      -- unique key
-    'event_ts',               -- event timestamp
-    'event_ts',               -- incremental filter column
-    DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY),  -- process yesterday's events
-    '''
-        account_id_hashed,
-        user_id_hashed,
-        account_type,
-        CASE
-            WHEN event_type IN (''created'', ''reopened'') THEN ''open''
-            WHEN event_type = ''closed''                   THEN ''closed''
-        END  AS status,
-        event_ts AS valid_from
-    '''
-);
-```
-
-**How it works:**
-1. MERGE: finds entities with new events, sets `valid_to = new_event_ts`, `is_current = FALSE` on their current row
-2. INSERT: adds new row per arriving event, `valid_to = NULL`, `is_current = TRUE`, `record_version = prev + 1`
-
-**Caveat:** MERGE on BQ is not cheap. Full rebuild is often faster than MERGE on partitioned tables if the partition is well-defined. Measure before committing.
 
 ## Validation: `utils.validate_scd2`
 
@@ -108,24 +100,32 @@ CALL `project.utils.validate_scd2`(
 
 | Check | What it catches |
 |---|---|
-| Multiple current rows | MERGE ran twice, or dedup logic failed |
+| Multiple current rows | Rebuild ran against a dirty base, or dedup logic failed |
 | Period gaps | `valid_to` on row N ≠ `valid_from` on row N+1 |
 | Overlapping periods | Two rows whose periods intersect |
 
 ## Where SCD2 Sits in the Stack
 
 ```
-raw.account_events        ← append-only, no SCD2
-    ↓  rebuild_scd2
-staging.stg_account_scd2 ← SCD2 built here
-    ↓  passthrough
-marts.dim_accounts        ← final SCD2 dimension
+raw.account_events        ← append-only, as received
+    ↓  modelgen
+staging.stg__account_events ← ds snapshot, one full copy per day
+    ↓  rebuild_scd2         (regulated carve-out only)
+marts.dim_accounts        ← SCD2 dimension
 ```
 
-SCD2 is defined in staging. Marts consume it. This keeps the mart layer thin — it doesn't need to know how the SCD2 was built.
+The `ds` snapshot is the base every consumer reads. SCD2 is a derived
+convenience on top of it, not a layer everything must pass through.
+
+## SCD2 is OLAP, Not OLTP
+
+The rebuild runs once per daily batch. Not thousands of times per second.
+BQ handles it. See [Architecture](architecture.md) for the OLTP vs OLAP
+distinction.
 
 ## Related
 
 - [Architecture](architecture.md) — OLTP vs OLAP, why SCD2 belongs in BQ
+- [Tooling Decisions](decisions.md) — why `ds` replaced SCD2 as the default
 - `models/utils/bq_struct_contract.sql` — contract validation after rebuild
 - `models/utils/bq_stg_scd2.sql` — procedure implementations

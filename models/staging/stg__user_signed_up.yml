@@ -5,7 +5,7 @@ models:
     description: "Consumption Data Product. Stable contract for user_signed_up. Casts and renames here absorb upstream schema drift so downstream FDPs do not break."
     config:
       materialized: incremental
-      incremental_strategy: merge
+      incremental_strategy: insert_overwrite
       schema: staging
     columns:
       - name: event_id
@@ -13,10 +13,14 @@ models:
         description: "Unique identifier for this event."
         tests:
           - not_null
-          - unique
+          - unique:
+              config: {"where": "ds = date('{{ var(\"ds\", run_started_at.strftime(\"%Y-%m-%d\")) }}')"}
       - name: user_id
-        data_type: STRING
+        data_type: BYTES
         description: "The ID of the user who signed up."
+        meta:
+          classification: pii
+          encrypted: true
         tests:
           - not_null
       - name: signup_method
@@ -32,5 +36,13 @@ models:
         tests:
           - not_null
       - name: country_code
-        data_type: STRING
+        data_type: BYTES
         description: "ISO 3166-1 alpha-2 country code."
+        meta:
+          classification: psi
+          encrypted: true
+      - name: ds
+        data_type: DATE
+        description: "Snapshot date. One full copy of the dimension per ds."
+        tests:
+          - not_null

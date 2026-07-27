@@ -50,6 +50,17 @@ The pre-commit configuration includes `detect-secrets` to block accidental crede
 
 ---
 
+---
+
+## Data in the warehouse
+
+This page covers the tool. Protecting the data it generates models for is a
+warehouse concern: see [Keystore & Erasure](bigquery/keystore.md) for the
+CMEK / KEK / DEK hierarchy and how right-to-erasure is served by
+crypto-shredding a single keystore row.
+
+---
+
 ## Reporting vulnerabilities
 
 Found something? Report it privately via the [Gitea security advisory](https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/issues) or email `hello@thomaspeoples.com`. Please don't open a public issue for a security vulnerability.

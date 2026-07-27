@@ -27,6 +27,10 @@ You'll also need Application Default Credentials for BigQuery introspection:
 gcloud auth application-default login
 ```
 
+Everything except `new` also runs without them — `--from-contract` generates
+from the contract's declared columns alone (and is the automatic fallback when
+no credentials are found). That's how CI runs it.
+
 ---
 
 ## ⚙️ Workflow
@@ -94,8 +98,7 @@ schema:
       - property: modelgenStaging
         value:
           dataset: staging
-          incrementalStrategy: merge
-          partitionBy: { field: received_at, dataType: timestamp, granularity: day }
+          materialization: snapshot   # ds snapshot; derives partitionBy: ds
           clusterBy: [user_id]
 
     properties:
@@ -119,6 +122,40 @@ schema:
 
 ---
 
+## 🔐 Classification and erasure
+
+A property marked `classification: pii` or `psi` is **encrypted on the way
+into staging** and never materialised in plaintext. Same seam as
+`required: true` → `not_null`: the contract says it, the generator does it,
+no human in the loop.
+
+```yaml
+      - property: modelgenSubjectField
+        value: USER_ID                 # who the row is about
+
+      - name: user_id
+        physicalName: USER_ID
+        classification: pii            # subject → DETERMINISTIC_ENCRYPT
+      - name: email
+        physicalName: EMAIL
+        classification: psi            # payload → AEAD.ENCRYPT
+```
+
+The subject column is encrypted deterministically, so its ciphertext is
+stable per keyset and joins, row counts and aggregates all survive erasure.
+Everything else is randomised. Both resolve their keyset from a keystore
+holding one wrapped key pair per subject.
+
+**Right to erasure is one DELETE.** Destroy the subject's keystore row and
+every ciphertext written under those keys becomes unrecoverable, across
+every table, without rewriting a single partition. A historical regulatory
+position still reconstructs in aggregate; the individual does not.
+
+Full design, key hierarchy (CMEK vs KEK vs DEK), erasure timeline and
+citations: **[Keystore & Erasure](docs/bigquery/keystore.md)**.
+
+---
+
 ## 🔄 Schema evolution
 
 | Source change | What wraith-modelgen does | What you do |
@@ -139,8 +176,22 @@ Validation runs as part of `modelgen gen --staging`. If it passes, the generated
 - `raw__event.yml`: dbt sources entry plus model definition. Columns mirror the introspected source schema.
 
 **For `--staging`:**
-- `stg__event.sql`: dbt incremental model with `{{ ref('raw__event') }}`. Casts and renames applied.
+- `stg__event.sql`: dbt model reading `{{ ref('raw__event') }}`. Casts and renames applied.
 - `stg__event.yml`: model definition with column tests from the contract.
+
+Staging defaults to a **datestamped daily snapshot**: `insert_overwrite`
+partitioned on a generated `ds` column, one full copy of the dimension per
+day. History is `where ds = '<date>'`, and any date backfills in parallel
+with the same SQL — the orchestrator injects it:
+
+```bash
+dbt run --select stg__event --vars '{ds: 2026-07-27}'
+```
+
+The grain is (key, `ds`), so the generated `unique` test is scoped to the
+partition the run writes. `materialization: incremental` on
+`modelgenStaging` opts back into a high-water-mark load, and then
+`incrementalStrategy` and `partitionBy` are yours to declare.
 
 ---
 
