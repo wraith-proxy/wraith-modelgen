@@ -45,7 +45,7 @@ flowchart LR
 
 **Raw** mirrors the source schema, with columns introspected explicitly at generation time. New source columns appear after the next `modelgen run` — not automatically. The source team can add columns without coordinating with analytics, but a regeneration is required to pick them up.
 
-**Staging** is the consumer contract. Explicit column selection, renames, and casts. Schema drift is absorbed here; downstream consumers only see the stable contract names.
+**Staging** is the consumer contract. Explicit column selection, renames, and casts. Schema drift is absorbed here; downstream consumers only see the stable contract names. It materialises as a datestamped daily snapshot by default — one full copy of the dimension per `ds` partition — so history is a partition filter and backfills are independent of each other.
 
 ---
 
@@ -81,7 +81,8 @@ flowchart TD
 | `introspect.py` | BigQuery schema fetch. `FakeIntrospector` for tests and offline use. |
 | `generator.py` | Jinja2 rendering, file writing, schema evolution logic. |
 | `cli.py` | Typer commands, Rich output, error handling. |
-| `src/templates/` | Jinja2 templates for the four generated artefacts. |
+| `lint.py` | Semantic checks on the parsed contract. All findings in one pass. |
+| `src/modelgen/templates/` | Jinja2 templates for the four generated artefacts. Must live inside the package or the wheel ships without them. |
 
 ---
 

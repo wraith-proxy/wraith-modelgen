@@ -240,6 +240,34 @@ A fully-annotated example: [`contracts/example_contract.yml`](https://git.thomas
 
 ---
 
+## Running the generated staging model
+
+Staging defaults to a datestamped daily snapshot, partitioned on a
+generated `ds` column. The daily run needs nothing:
+
+```bash
+dbt run --select stg__user_signed_up
+```
+
+Backfilling a past date uses the same SQL — pass the date instead of
+letting it default to dbt's run date. Dates are independent, so run as
+many in parallel as your warehouse will take:
+
+```bash
+dbt run --select stg__user_signed_up --vars '{ds: 2026-07-27}'
+```
+
+Set `materialization: incremental` on `modelgenStaging` to opt back into a
+high-water-mark load. See [Lint Rules](linting.md) for the checks that keep
+the two modes from being half-declared.
+
+If the contract classifies any property, the generated model joins the
+keystore, so the run needs a dbt source named `keystore.subject_keys` and
+the reader needs `cloudkms.cryptoKeyVersions.useToDecrypt` on the KEK. See
+[Keystore & Erasure](bigquery/keystore.md).
+
+---
+
 ## Schema evolution
 
 Source schemas change. wraith-modelgen validates the boundary and reports what broke.

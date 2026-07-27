@@ -20,8 +20,19 @@ its BigQuery/dbt specifics in ODCS `customProperties`:
     property.required        -> not_null test
     property.unique          -> unique test
     property.logicalTypeOptions.validValues -> accepted_values test
-  schema[].customProperties  -> modelgenLoadedAtField, modelgenRaw,
-                                modelgenStaging (dbt/layer config)
+    property.classification  -> pii/psi; drives encryption in staging
+  schema[].customProperties  -> modelgenLoadedAtField, modelgenSubjectField,
+                                modelgenRaw, modelgenStaging
+
+Staging materialises as a datestamped daily snapshot by default: one full
+copy of the dimension per `ds` partition. `materialization: incremental`
+opts back into an incremental load keyed on the contract's partitionBy.
+
+A classified property is encrypted on the way into staging, never
+materialised in plaintext. modelgenSubjectField names the source column
+identifying the data subject: it is encrypted deterministically so joins
+survive a crypto-shred, and it is the keystore lookup for every other
+classified column on the row.
 """
 
 from __future__ import annotations
@@ -68,6 +79,7 @@ class StagingColumn:
     type: str = ""  # BigQuery type to cast to (default: no cast)
     description: str = ""
     tests: list[ColumnTest] = field(default_factory=list)
+    classification: str = ""  # "" | "pii" | "psi" — drives encryption
 
     def __post_init__(self):
         if not self.source:
@@ -115,6 +127,7 @@ class StagingColumn:
             type=prop.get("physicalType", ""),
             description=prop.get("description", ""),
             tests=tests,
+            classification=(prop.get("classification") or "").strip().lower(),
         )
 
 
@@ -163,6 +176,13 @@ class PartitionConfig:
         )
 
 
+SNAPSHOT_PARTITION_FIELD = "ds"
+SNAPSHOT_STRATEGY = "insert_overwrite"
+_SNAPSHOT_PARTITION = PartitionConfig(
+    field=SNAPSHOT_PARTITION_FIELD, data_type="date", granularity="day"
+)
+
+
 def _cluster_by(raw: dict) -> list[str]:
     cluster_by = raw.get("clusterBy", [])
     if isinstance(cluster_by, str):
@@ -193,25 +213,47 @@ class RawConfig:
 @dataclass
 class StagingConfig:
     dataset: str = "staging"
-    incremental_strategy: str = "merge"
+    materialization: str = "snapshot"
+    incremental_strategy: str = SNAPSHOT_STRATEGY
     columns: list[StagingColumn] = field(default_factory=list)
     partition_by: PartitionConfig | None = None
     cluster_by: list[str] = field(default_factory=list)
+
+    @property
+    def is_snapshot(self) -> bool:
+        return self.materialization == "snapshot"
 
     @classmethod
     def from_raw(
         cls, raw: dict | None, columns: list[StagingColumn]
     ) -> StagingConfig:
         raw = raw or {}
+        if "dedup" in raw:
+            raise ContractError(
+                "modelgenStaging does not support 'dedup' — dedup is a"
+                " raw-layer concern, and a snapshot is the full dimension."
+            )
         # A contract can opt out of a staging model (raw-only) while still
         # declaring its schema/key via properties.
         if raw.get("generate") is False:
             columns = []
+        materialization = raw.get("materialization", "snapshot")
+        snapshot = materialization == "snapshot"
+        # Snapshot mode implies partitioning on ds, so the contract does not
+        # restate it. A declared partitionBy is kept as-is and lint rejects
+        # it if it disagrees — silently overriding it would hide the mistake.
+        declared_partition = PartitionConfig.from_raw(raw.get("partitionBy"))
+        if snapshot and declared_partition is None:
+            declared_partition = _SNAPSHOT_PARTITION
         return cls(
             dataset=raw.get("dataset", "staging"),
-            incremental_strategy=raw.get("incrementalStrategy", "merge"),
+            materialization=materialization,
+            incremental_strategy=raw.get(
+                "incrementalStrategy",
+                SNAPSHOT_STRATEGY if snapshot else "merge",
+            ),
             columns=columns,
-            partition_by=PartitionConfig.from_raw(raw.get("partitionBy")),
+            partition_by=declared_partition,
             cluster_by=_cluster_by(raw),
         )
 
@@ -258,6 +300,15 @@ class EventContract:
     source: SourceRef
     raw: RawConfig
     staging: StagingConfig
+    subject_field: str = ""  # source column identifying the data subject
+
+    @property
+    def classified_columns(self) -> list[StagingColumn]:
+        return [c for c in self.staging.columns if c.classification]
+
+    @property
+    def encrypts(self) -> bool:
+        return bool(self.classified_columns)
 
     @property
     def raw_model_name(self) -> str:
@@ -349,4 +400,5 @@ class EventContract:
                 cfg.get("modelgenStaging"),
                 [StagingColumn.from_property(p) for p in props],
             ),
+            subject_field=cfg.get("modelgenSubjectField") or "",
         )

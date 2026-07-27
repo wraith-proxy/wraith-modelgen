@@ -8,7 +8,7 @@ models:
       incremental_strategy: {{ event.staging.incremental_strategy }}
       schema: {{ event.staging.dataset }}
     columns:
-{% for col in event.staging.columns %}
+{% for col in staging_columns %}
       - name: {{ col.name }}
 {% if col.type %}
         data_type: {{ col.type }}
@@ -16,13 +16,18 @@ models:
 {% if col.description %}
         description: "{{ col.description | replace('"', '\\"') }}"
 {% endif %}
+{% if col.classification %}
+        meta:
+          classification: {{ col.classification }}
+          encrypted: true
+{% endif %}
 {% if col.tests %}
         tests:
 {% for test in col.tests %}
 {% if test.args %}
           - {{ test.name }}:
 {% for k, v in test.args.items() %}
-              {{ k }}: {{ v | tojson }}
+              {{ k }}: {{ v | json }}
 {% endfor %}
 {% else %}
           - {{ test.name }}
@@ -30,3 +35,10 @@ models:
 {% endfor %}
 {% endif %}
 {% endfor %}
+{% if snapshot %}
+      - name: ds
+        data_type: DATE
+        description: "Snapshot date. One full copy of the dimension per ds."
+        tests:
+          - not_null
+{% endif %}

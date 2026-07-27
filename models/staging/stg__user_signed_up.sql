@@ -7,17 +7,26 @@
   New source columns flow into raw automatically but are only surfaced here
   once added to the contract.
 
+  Datestamped daily snapshot: one full copy of the dimension per ds
+  partition. Query history with `where ds = '<date>'`. Backfill any date
+  in parallel with `dbt run --vars '{ds: YYYY-MM-DD}'`.
+
+  Classified columns are encrypted here and never materialised in
+  plaintext downstream. Decrypt in a view or at query time only — a table
+  holding decrypted values is a second copy the crypto-shred cannot reach.
+  Subject column: deterministic, so joins survive the shred. Everything
+  else: randomised. Erasure is one DELETE from the keystore.
+
   Upstream: raw__user_signed_up
   Contract: contracts/example_contract.yml
 */
 
 {{ config(
     materialized='incremental',
-    incremental_strategy='merge',
-    unique_key='event_id',
+    incremental_strategy='insert_overwrite',
     schema='staging',
-    partition_by={'field': 'received_at', 'data_type': 'timestamp', 'granularity': 'day'},
-    cluster_by='user_id'
+    partition_by={'field': 'ds', 'data_type': 'date', 'granularity': 'day'},
+    cluster_by='event_id'
 ) }}
 
 with source as (
@@ -30,19 +39,35 @@ with source as (
         COUNTRY_CODE
     from {{ ref('raw__user_signed_up') }}
 
-    {%- if is_incremental() %}
-    where RECEIVED_AT > (
-        select max(received_at)
-        from {{ this }}
-    )
-    {%- endif %}
+),
+
+keyed as (
+
+    select
+        source.*,
+        keystore.kek_resource_name,
+        keystore.wrapped_dek_deterministic,
+        keystore.wrapped_dek_randomised,
+        cast(keystore.subject_id as bytes) as _modelgen_aad
+    from source
+    left join {{ source('keystore', 'subject_keys') }} as keystore
+        on keystore.subject_id = source.USER_ID
 
 )
 
 select
     cast(EVENT_ID as STRING) as event_id,
-    cast(USER_ID as STRING) as user_id,
+    deterministic_encrypt(
+        keys.keyset_chain(kek_resource_name, wrapped_dek_deterministic),
+        cast(USER_ID as STRING),
+        _modelgen_aad
+    ) as user_id,
     cast(SIGNUP_METHOD as STRING) as signup_method,
     cast(RECEIVED_AT as TIMESTAMP) as received_at,
-    cast(COUNTRY_CODE as STRING) as country_code
-from source
+    aead.encrypt(
+        keys.keyset_chain(kek_resource_name, wrapped_dek_randomised),
+        cast(COUNTRY_CODE as STRING),
+        _modelgen_aad
+    ) as country_code,
+    date('{{ var("ds", run_started_at.strftime("%Y-%m-%d")) }}') as ds
+from keyed

@@ -98,18 +98,26 @@ class TestDraftContract:
     def test_partition_derived_from_loaded_at(self):
         event = EventContract.from_text(self.draft())
         assert event.raw.partition_by is not None
-        assert event.staging.partition_by is not None
         assert event.raw.partition_by.field == "RECEIVED_AT"
-        assert event.staging.partition_by.field == "received_at"
         assert event.raw.partition_by.data_type == "timestamp"
 
-    def test_no_partition_when_loaded_at_not_temporal(self):
+    def test_staging_drafts_as_ds_snapshot(self):
+        event = EventContract.from_text(self.draft())
+        assert event.staging.is_snapshot
+        partition = event.staging.partition_by
+        assert partition is not None
+        assert partition.field == "ds"
+
+    def test_no_raw_partition_when_loaded_at_not_temporal(self):
         cols = [IntrospectedColumn("ID", "STRING")]
         event = EventContract.from_text(
             draft_contract("p", "d", "t", cols, name="t")
         )
         assert event.raw.partition_by is None
-        assert event.staging.partition_by is None
+        # Staging still snapshots — ds is its own column, not the source's.
+        partition = event.staging.partition_by
+        assert partition is not None
+        assert partition.field == "ds"
 
     def test_unique_key_gets_tests(self):
         event = EventContract.from_text(self.draft())

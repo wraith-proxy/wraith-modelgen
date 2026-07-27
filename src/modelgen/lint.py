@@ -17,13 +17,20 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from modelgen.contract import EventContract, StagingConfig
+from modelgen.contract import (
+    SNAPSHOT_PARTITION_FIELD,
+    SNAPSHOT_STRATEGY,
+    EventContract,
+    StagingConfig,
+)
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EVENT_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 _PROJECT = re.compile(r"^[a-z][a-z0-9-]*$")
 
 _INCREMENTAL_STRATEGIES = {"merge", "insert_overwrite", "microbatch"}
+_MATERIALIZATIONS = {"snapshot", "incremental"}
+_CLASSIFICATIONS = {"pii", "psi"}
 _PARTITION_DATA_TYPES = {"timestamp", "date", "datetime", "int64"}
 _PARTITION_GRANULARITIES = {"hour", "day", "month", "year"}
 
@@ -134,7 +141,9 @@ def lint_contract(contract: EventContract) -> list[Finding]:
 
     findings.extend(_lint_layer_config("raw", contract))
     findings.extend(_lint_layer_config("staging", contract))
+    findings.extend(_lint_staging_materialization(contract))
     findings.extend(_lint_staging_columns(contract))
+    findings.extend(_lint_classification(contract))
 
     return findings
 
@@ -199,6 +208,56 @@ def _lint_layer_config(layer: str, contract: EventContract) -> list[Finding]:
     return findings
 
 
+def _lint_staging_materialization(
+    contract: EventContract,
+) -> list[Finding]:
+    staging: StagingConfig = contract.staging
+    findings: list[Finding] = []
+    err = _appender(findings, Severity.ERROR)
+
+    if staging.materialization not in _MATERIALIZATIONS:
+        err(
+            "invalid-staging-materialization",
+            f"staging.materialization {staging.materialization!r} must be"
+            f" one of {sorted(_MATERIALIZATIONS)}.",
+        )
+        return findings
+
+    if not staging.is_snapshot:
+        return findings
+
+    if staging.incremental_strategy != SNAPSHOT_STRATEGY:
+        err(
+            "snapshot-strategy-conflict",
+            f"staging.incremental_strategy"
+            f" {staging.incremental_strategy!r} conflicts with"
+            f" materialization: snapshot, which replaces whole"
+            f" {SNAPSHOT_PARTITION_FIELD} partitions. Drop the key or use"
+            f" {SNAPSHOT_STRATEGY!r}.",
+        )
+
+    pb = staging.partition_by
+    if pb is None or pb.field != SNAPSHOT_PARTITION_FIELD:
+        declared = "nothing" if pb is None else repr(pb.field)
+        err(
+            "snapshot-partition-not-ds",
+            f"staging.partitionBy.field is {declared}; a snapshot is"
+            f" partitioned on {SNAPSHOT_PARTITION_FIELD!r}. Drop"
+            " partitionBy and let it derive, or switch to"
+            " materialization: incremental.",
+        )
+
+    if any(c.name == SNAPSHOT_PARTITION_FIELD for c in staging.columns):
+        err(
+            "ds-column-reserved",
+            f"a snapshot model generates its own"
+            f" {SNAPSHOT_PARTITION_FIELD!r} column; a property may not"
+            " also map to that name.",
+        )
+
+    return findings
+
+
 def _lint_staging_columns(contract: EventContract) -> list[Finding]:
     staging: StagingConfig = contract.staging
     findings: list[Finding] = []
@@ -248,6 +307,8 @@ def _lint_staging_columns(contract: EventContract) -> list[Finding]:
     # loaded_at_field aren't among them, the generated config and
     # incremental filter reference columns the model doesn't produce.
     staging_names = {c.name for c in staging.columns}
+    if staging.is_snapshot:
+        staging_names.add(SNAPSHOT_PARTITION_FIELD)
     for key in contract.unique_key:
         if key not in seen_sources:
             err(
@@ -290,6 +351,130 @@ def _lint_staging_columns(contract: EventContract) -> list[Finding]:
                 " but declares no tests. Consider [not_null,"
                 " unique].",
             )
+
+    return findings
+
+
+def _lint_classification(contract: EventContract) -> list[Finding]:
+    """Encryption is only as good as the contract wiring it up.
+
+    Every check here catches a way the generated model would leak a
+    classified value in plaintext, or produce SQL that cannot run.
+    """
+    staging = contract.staging
+    findings: list[Finding] = []
+    err = _appender(findings, Severity.ERROR)
+    warn = _appender(findings, Severity.WARNING)
+
+    for col in staging.columns:
+        if col.classification and col.classification not in _CLASSIFICATIONS:
+            err(
+                "invalid-classification",
+                f"property {col.name!r} declares classification"
+                f" {col.classification!r}; modelgen understands"
+                f" {sorted(_CLASSIFICATIONS)}.",
+            )
+        # Encryption returns BYTES, so accepted_values could never match.
+        # An enumerated column is also a category rather than a personal
+        # value, and categories leak to frequency analysis.
+        if col.classification and any(
+            t.name == "accepted_values" for t in col.tests
+        ):
+            err(
+                "classified-column-enumerated",
+                f"classified property {col.name!r} declares validValues."
+                " An enumerated column is a category, not a personal"
+                " value: its ciphertext falls to frequency analysis and"
+                " the accepted_values test cannot match BYTES.",
+            )
+
+    # Encryption emits BYTES, and BigQuery clusters on none of it and
+    # partitions on none of it. Catch it here rather than in dbt.
+    classified = {c.name for c in contract.classified_columns}
+    for col in staging.cluster_by:
+        if col in classified:
+            err(
+                "cluster-column-classified",
+                f"clusterBy names {col!r}, which is classified and"
+                " therefore emitted as BYTES. BigQuery cannot cluster on"
+                " BYTES. Cluster on an unclassified column, or wrap the"
+                " ciphertext in to_hex() yourself if the lookup path"
+                " truly needs it.",
+            )
+    if (
+        staging.partition_by is not None
+        and staging.partition_by.field in classified
+    ):
+        err(
+            "partition-field-classified",
+            f"partitionBy.field {staging.partition_by.field!r} is"
+            " classified and therefore emitted as BYTES. BigQuery"
+            " partitions on date, timestamp, datetime or int64 only.",
+        )
+
+    if not contract.encrypts:
+        return findings
+
+    if not contract.subject_field:
+        err(
+            "subject-field-not-declared",
+            "properties are classified but modelgenSubjectField is not"
+            " set. modelgen cannot tell which column identifies the data"
+            " subject, so it cannot resolve a keyset.",
+        )
+        return findings
+
+    subject = next(
+        (c for c in staging.columns if c.source == contract.subject_field),
+        None,
+    )
+    if subject is None:
+        err(
+            "subject-field-not-in-staging",
+            f"modelgenSubjectField {contract.subject_field!r} is not a"
+            " declared staging property. The keystore join would"
+            " reference a column the model never selects.",
+        )
+        return findings
+
+    if not subject.classification:
+        err(
+            "subject-field-unclassified",
+            f"modelgenSubjectField {contract.subject_field!r} identifies"
+            " the data subject but carries no classification, so it"
+            " would be materialised in plaintext — the one column that"
+            " must not be.",
+        )
+
+    # The incremental filter reads `where <upstream> > (select max(<this>))`.
+    # If the staging side is ciphertext that comparison is nonsense. A
+    # snapshot has no filter, so this only bites in incremental mode.
+    if not staging.is_snapshot:
+        loaded_at = next(
+            (
+                c
+                for c in staging.columns
+                if c.source == contract.loaded_at_field
+            ),
+            None,
+        )
+        if loaded_at is not None and loaded_at.classification:
+            err(
+                "loaded-at-classified",
+                f"modelgenLoadedAtField {contract.loaded_at_field!r} is"
+                " classified, so the incremental filter would compare a"
+                " timestamp against ciphertext. A load timestamp is"
+                " pipeline metadata — drop the classification, or"
+                " switch to materialization: snapshot.",
+            )
+
+    if not any(t.name == "not_null" for t in subject.tests):
+        warn(
+            "subject-field-untested",
+            f"subject column {subject.name!r} has no not_null test. A"
+            " row whose subject has no keyset encrypts to NULL, and"
+            " nothing would surface it. Set required: true.",
+        )
 
     return findings
 

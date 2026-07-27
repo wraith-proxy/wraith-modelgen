@@ -7,7 +7,7 @@ Source systems (OLTP)
     ↓  ETL / streaming
 project.raw          ← append-only event logs, no transformation
     ↓  dbt
-project.staging      ← typed, parsed, SCD2 built here
+project.staging      ← typed, parsed, ds snapshots built here
     ↓  dbt
 project.marts        ← dimensions, facts, presentation aggregates
     ↓
@@ -54,21 +54,27 @@ BQ is OLAP. Not suitable as an OLTP system.
 - Risk and credit models consuming historical data
 - Formerly in SAS/Teradata/Oracle — migrating to BQ/GCP
 
-**SCD2 is OLAP, not OLTP.** The MERGE statement closing a previous record runs once per daily batch, not thousands of times per second. BQ handles it. See [SCD Type 2](scd2.md).
+**Snapshot and SCD2 rebuilds are OLAP, not OLTP.** Staging replaces one `ds` partition per daily batch; the SCD2 carve-out rebuilds from that base on the same cadence. Neither runs thousands of times per second. BQ handles it. See [SCD Type 2](scd2.md).
 
 ## Dataset Naming Convention
 
 ```
 {project}.raw       — source system logs, append-only, no transformation
-{project}.staging   — typed, parsed, SCD2 applied
+{project}.staging   — typed, parsed, datestamped daily snapshots (ds)
 {project}.marts     — dimensions, facts, presentation aggregates
 {project}.utils     — shared stored procedures (project.utils.procedure_name)
 {project}.snapshots — schema baseline snapshots for drift detection
+{project}.keystore  — per-subject wrapped DEKs. Its own dataset so time
+                      travel can be set short, and IAM'd separately
 ```
+
+`keystore` is a dataset of its own rather than a table in `utils` because
+time travel is a dataset property and erasure depends on it being short. See
+[Keystore & Erasure](keystore.md).
 
 ## Partition and Cluster Strategy
 
-**Partition** on the primary timestamp column (event date, valid_from). BQ uses partitions for date-range pruning — critical for cost on daily incremental loads.
+**Partition** on the date the layer is keyed by: `ds` for staging snapshots, the event timestamp for raw, `valid_from` for a derived SCD2 dimension. BQ uses partitions for date-range pruning — critical for cost on daily loads.
 
 **Cluster** on the most common filter/join columns (entity key, status, type). BQ uses clustering for block-level pruning within partitions.
 

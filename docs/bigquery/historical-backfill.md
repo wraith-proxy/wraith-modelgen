@@ -115,9 +115,16 @@ No overlap. Set cutoff_date to the first date your incremental pipeline will pro
 Next step is rebuilding derived layers from the now-populated raw table:
 
 ```
-1. Run staging model   (full refresh)
-2. Run SCD2 rebuild    (rebuild_scd2 procedure)
+1. Run staging snapshots, one ds per historical date:
+     dbt run --select stg__event --vars '{ds: YYYY-MM-DD}'
+   Dates are independent — run them in parallel, in any order.
+2. Run SCD2 rebuild    (rebuild_scd2, regulated carve-out only)
 3. Run mart models     (full refresh)
 4. Verify row counts and date coverage at each layer
 5. Hand to daily incremental pipeline
 ```
+
+Step 1 is where the `ds` pattern earns its keep. An SCD2 staging model had to
+be backfilled sequentially, because day N's `valid_to` depends on day N-1.
+Snapshots have no such dependency: the same SQL that runs tomorrow runs for
+any date you hand it.

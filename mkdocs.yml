@@ -29,6 +29,7 @@ nav:
     - Table Creation: bigquery/table-creation.md
     - Historical Backfill: bigquery/historical-backfill.md
     - SCD Type 2: bigquery/scd2.md
+    - Keystore & Erasure: bigquery/keystore.md
     - Tooling Decisions: bigquery/decisions.md
 
 plugins:

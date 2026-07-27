@@ -125,19 +125,15 @@ def draft_contract(
         "incrementalStrategy": "merge",
         "dedup": True,
     }
+    # Staging is a ds snapshot, which derives its own partitioning.
     staging_cfg: dict = {
         "dataset": "staging",
-        "incrementalStrategy": "merge",
+        "materialization": "snapshot",
     }
     partition_type = _PARTITION_TYPE.get(loaded_at_col.field_type)
     if partition_type:
         raw_cfg["partitionBy"] = {
             "field": loaded_at,
-            "dataType": partition_type,
-            "granularity": "day",
-        }
-        staging_cfg["partitionBy"] = {
-            "field": loaded_at.lower(),
             "dataType": partition_type,
             "granularity": "day",
         }
@@ -182,6 +178,12 @@ def draft_contract(
         f"# Draft ODCS contract for {project}.{dataset}.{table}.\n"
         "# TODO: confirm the guessed primaryKey and modelgenLoadedAtField"
         " before generating.\n"
+        "# TODO: classify personal columns (classification: pii | psi) and"
+        " set modelgenSubjectField\n"
+        "#       to the column identifying the data subject. Classified"
+        " columns are encrypted\n"
+        "#       into staging and erasable by crypto-shred; unclassified"
+        " ones are not.\n"
     )
     return header + yaml.safe_dump(doc, sort_keys=False, width=88)
 

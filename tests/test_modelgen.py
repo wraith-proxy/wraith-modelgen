@@ -73,6 +73,7 @@ schema:
       - property: modelgenStaging
         value:
           dataset: staging
+          materialization: incremental
           incrementalStrategy: merge
           partitionBy:
             field: received_at
@@ -109,6 +110,64 @@ schema:
 """
 
 
+SNAPSHOT_CONTRACT_YAML = CONTRACT_YAML.replace(
+    """          materialization: incremental
+          incrementalStrategy: merge
+          partitionBy:
+            field: received_at
+            dataType: timestamp
+            granularity: day
+""",
+    "          materialization: snapshot\n",
+)
+
+
+# user_id is the subject (deterministic); received_at is payload
+# (randomised). event_id and signup_method stay plaintext.
+CLASSIFIED_CONTRACT_YAML = (
+    SNAPSHOT_CONTRACT_YAML.replace(
+        """      - property: modelgenLoadedAtField
+        value: RECEIVED_AT
+""",
+        """      - property: modelgenLoadedAtField
+        value: RECEIVED_AT
+      - property: modelgenSubjectField
+        value: USER_ID
+""",
+    )
+    .replace(
+        """      - name: user_id
+        physicalName: USER_ID
+        logicalType: string
+        physicalType: STRING
+        required: true
+""",
+        """      - name: user_id
+        physicalName: USER_ID
+        logicalType: string
+        physicalType: STRING
+        required: true
+        classification: pii
+""",
+    )
+    .replace(
+        """      - name: received_at
+        physicalName: RECEIVED_AT
+        logicalType: date
+        physicalType: TIMESTAMP
+        required: true
+""",
+        """      - name: received_at
+        physicalName: RECEIVED_AT
+        logicalType: date
+        physicalType: TIMESTAMP
+        required: true
+        classification: psi
+""",
+    )
+)
+
+
 def _source_columns() -> list[IntrospectedColumn]:
     return [
         IntrospectedColumn("EVENT_ID", "STRING", "REQUIRED"),
@@ -129,6 +188,16 @@ def contract_file(tmp_path) -> Path:
 @pytest.fixture
 def contract(contract_file) -> EventContract:
     return EventContract.from_file(contract_file)
+
+
+@pytest.fixture
+def snapshot_contract() -> EventContract:
+    return EventContract.from_text(SNAPSHOT_CONTRACT_YAML)
+
+
+@pytest.fixture
+def classified_contract() -> EventContract:
+    return EventContract.from_text(CLASSIFIED_CONTRACT_YAML)
 
 
 @pytest.fixture
@@ -444,6 +513,232 @@ class TestStagingGeneration:
 # ---------------------------------------------------------------------------
 # Schema evolution: the enterprise scenarios
 # ---------------------------------------------------------------------------
+
+
+class TestSnapshotStaging:
+    """Staging defaults to a datestamped daily snapshot: one full copy of
+    the dimension per ds partition, no incremental high-water mark."""
+
+    def sql(self, contract, introspector, tmp_path) -> str:
+        generate(contract, introspector, tmp_path, Layer.STAGING)
+        return (tmp_path / "stg__user_signed_up.sql").read_text()
+
+    def yml(self, contract, introspector, tmp_path) -> dict:
+        generate(contract, introspector, tmp_path, Layer.STAGING)
+        return yaml.safe_load(
+            (tmp_path / "stg__user_signed_up.yml").read_text()
+        )
+
+    def test_snapshot_is_the_default(self):
+        stripped = SNAPSHOT_CONTRACT_YAML.replace(
+            "          materialization: snapshot\n", ""
+        )
+        assert EventContract.from_text(stripped).staging.is_snapshot
+
+    def test_partition_derives_to_ds(self, snapshot_contract):
+        pb = snapshot_contract.staging.partition_by
+        assert (pb.field, pb.data_type, pb.granularity) == (
+            "ds",
+            "date",
+            "day",
+        )
+
+    def test_strategy_derives_to_insert_overwrite(self, snapshot_contract):
+        assert (
+            snapshot_contract.staging.incremental_strategy
+            == "insert_overwrite"
+        )
+
+    def test_staging_rejects_dedup(self):
+        with pytest.raises(ContractError, match="dedup"):
+            EventContract.from_text(
+                SNAPSHOT_CONTRACT_YAML.replace(
+                    "          materialization: snapshot\n",
+                    "          materialization: snapshot\n"
+                    "          dedup: true\n",
+                )
+            )
+
+    def test_sql_stamps_ds_from_var(
+        self, snapshot_contract, introspector, tmp_path
+    ):
+        sql = self.sql(snapshot_contract, introspector, tmp_path)
+        assert (
+            'date(\'{{ var("ds",'
+            ' run_started_at.strftime("%Y-%m-%d")) }}\') as ds' in sql
+        )
+
+    def test_sql_config_partitions_on_ds(
+        self, snapshot_contract, introspector, tmp_path
+    ):
+        sql = self.sql(snapshot_contract, introspector, tmp_path)
+        assert "incremental_strategy='insert_overwrite'" in sql
+        assert "'field': 'ds', 'data_type': 'date'" in sql
+
+    def test_sql_omits_unique_key(
+        self, snapshot_contract, introspector, tmp_path
+    ):
+        # insert_overwrite replaces whole partitions and never reads it.
+        assert "unique_key" not in self.sql(
+            snapshot_contract, introspector, tmp_path
+        )
+
+    def test_sql_has_no_incremental_filter(
+        self, snapshot_contract, introspector, tmp_path
+    ):
+        sql = self.sql(snapshot_contract, introspector, tmp_path)
+        assert "is_incremental()" not in sql
+
+    def test_yml_declares_ds_column(
+        self, snapshot_contract, introspector, tmp_path
+    ):
+        parsed = self.yml(snapshot_contract, introspector, tmp_path)
+        ds = parsed["models"][0]["columns"][-1]
+        assert ds["name"] == "ds"
+        assert ds["data_type"] == "DATE"
+        assert "not_null" in ds["tests"]
+
+    def test_yml_scopes_unique_test_to_one_partition(
+        self, snapshot_contract, introspector, tmp_path
+    ):
+        # The grain is (key, ds), so an unscoped unique test would fail as
+        # soon as a second partition lands.
+        parsed = self.yml(snapshot_contract, introspector, tmp_path)
+        event_id = parsed["models"][0]["columns"][0]
+        unique = next(
+            t["unique"] for t in event_id["tests"] if isinstance(t, dict)
+        )
+        assert unique["config"]["where"].startswith("ds = date(")
+
+    def test_incremental_mode_keeps_high_water_mark(
+        self, contract, introspector, tmp_path
+    ):
+        generate(contract, introspector, tmp_path, Layer.STAGING)
+        sql = (tmp_path / "stg__user_signed_up.sql").read_text()
+        assert "is_incremental()" in sql
+        assert "unique_key='event_id'" in sql
+        assert " as ds" not in sql
+
+
+class TestClassifiedStaging:
+    """Classification drives encryption at generation time. A classified
+    column is never materialised in plaintext."""
+
+    def sql(self, contract, introspector, tmp_path) -> str:
+        generate(contract, introspector, tmp_path, Layer.STAGING)
+        return (tmp_path / "stg__user_signed_up.sql").read_text()
+
+    def yml_col(self, contract, introspector, tmp_path, name) -> dict:
+        generate(contract, introspector, tmp_path, Layer.STAGING)
+        parsed = yaml.safe_load(
+            (tmp_path / "stg__user_signed_up.yml").read_text()
+        )
+        return next(
+            c for c in parsed["models"][0]["columns"] if c["name"] == name
+        )
+
+    def test_classification_parsed(self, classified_contract):
+        by_name = {c.name: c for c in classified_contract.staging.columns}
+        assert by_name["user_id"].classification == "pii"
+        assert by_name["received_at"].classification == "psi"
+        assert by_name["event_id"].classification == ""
+        assert classified_contract.subject_field == "USER_ID"
+        assert classified_contract.encrypts
+
+    def test_subject_is_deterministic(
+        self, classified_contract, introspector, tmp_path
+    ):
+        # Stable ciphertext per keyset is what lets joins, counts and
+        # aggregates survive the crypto-shred.
+        sql = self.sql(classified_contract, introspector, tmp_path)
+        assert "deterministic_encrypt(" in sql
+        assert "wrapped_dek_deterministic" in sql
+
+    def test_payload_is_randomised(
+        self, classified_contract, introspector, tmp_path
+    ):
+        sql = self.sql(classified_contract, introspector, tmp_path)
+        assert "aead.encrypt(" in sql
+        assert "wrapped_dek_randomised" in sql
+
+    def test_no_classified_column_emitted_in_plaintext(
+        self, classified_contract, introspector, tmp_path
+    ):
+        sql = self.sql(classified_contract, introspector, tmp_path)
+        # The plaintext source names appear only inside an encrypt call or
+        # the source CTE — never as a bare projection into the model.
+        assert "cast(USER_ID as STRING) as user_id" not in sql
+        assert "cast(RECEIVED_AT as TIMESTAMP) as received_at" not in sql
+
+    def test_unclassified_columns_untouched(
+        self, classified_contract, introspector, tmp_path
+    ):
+        sql = self.sql(classified_contract, introspector, tmp_path)
+        assert "cast(EVENT_ID as STRING) as event_id" in sql
+
+    def test_keystore_joined_on_the_subject(
+        self, classified_contract, introspector, tmp_path
+    ):
+        sql = self.sql(classified_contract, introspector, tmp_path)
+        assert "source('keystore', 'subject_keys')" in sql
+        assert "on keystore.subject_id = source.USER_ID" in sql
+        assert "from keyed" in sql
+
+    def test_keystore_join_is_left(
+        self, classified_contract, introspector, tmp_path
+    ):
+        # An inner join would silently drop every row whose subject has no
+        # keyset. The row must survive so not_null can surface it.
+        sql = self.sql(classified_contract, introspector, tmp_path)
+        assert "left join" in sql
+
+    def test_aad_bound_to_the_subject(
+        self, classified_contract, introspector, tmp_path
+    ):
+        sql = self.sql(classified_contract, introspector, tmp_path)
+        assert "cast(keystore.subject_id as bytes) as _modelgen_aad" in sql
+        assert sql.count("_modelgen_aad") == 3  # declared + two encrypts
+
+    def test_plaintext_cast_not_doubled(
+        self, classified_contract, introspector, tmp_path
+    ):
+        sql = self.sql(classified_contract, introspector, tmp_path)
+        assert "cast(cast(USER_ID as STRING) as string)" not in sql
+        assert "cast(USER_ID as STRING)" in sql
+
+    def test_non_string_type_stringified_for_aead(
+        self, classified_contract, introspector, tmp_path
+    ):
+        # AEAD takes STRING or BYTES, so a TIMESTAMP is cast twice: once to
+        # honour the contract type, once to hand AEAD something it accepts.
+        sql = self.sql(classified_contract, introspector, tmp_path)
+        assert "cast(cast(RECEIVED_AT as TIMESTAMP) as string)" in sql
+
+    def test_yml_declares_ciphertext_as_bytes(
+        self, classified_contract, introspector, tmp_path
+    ):
+        col = self.yml_col(
+            classified_contract, introspector, tmp_path, "user_id"
+        )
+        assert col["data_type"] == "BYTES"
+        assert col["meta"] == {"classification": "pii", "encrypted": True}
+
+    def test_yml_leaves_unclassified_type_alone(
+        self, classified_contract, introspector, tmp_path
+    ):
+        col = self.yml_col(
+            classified_contract, introspector, tmp_path, "event_id"
+        )
+        assert col["data_type"] == "STRING"
+        assert "meta" not in col
+
+    def test_unclassified_contract_has_no_keystore_join(
+        self, snapshot_contract, introspector, tmp_path
+    ):
+        sql = self.sql(snapshot_contract, introspector, tmp_path)
+        assert "keystore" not in sql
+        assert "encrypt" not in sql
+        assert "from source" in sql
 
 
 class TestSchemaEvolution:

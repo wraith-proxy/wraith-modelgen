@@ -11,7 +11,17 @@
 #   - property.primaryKey    = contributes to the dbt unique_key (source names).
 #   - required/unique/validValues map to dbt not_null/unique/accepted_values.
 #   - schema.customProperties carries modelgenLoadedAtField + the raw/staging
-#     dbt layer config (dataset, incremental strategy, partitioning, dedup).
+#     dbt layer config (dataset, materialization, partitioning, dedup).
+#
+# Staging materialises as a datestamped daily snapshot: one full copy of the
+# dimension per `ds` partition, so history is `where ds = '<date>'` and any
+# date backfills in parallel. `materialization: incremental` opts back out.
+#
+# Classification (ODCS `classification`, pii or psi) drives encryption at
+# generation time, the same seam that turns `required: true` into a
+# not_null test with no human in the loop. A classified property is
+# encrypted on the way into staging and never materialised in plaintext.
+# Erasure is one DELETE from the keystore — see docs/bigquery/keystore.md.
 #
 # Schema evolution:
 #   - NEW source columns: appear in raw automatically. Invisible in staging
@@ -53,6 +63,11 @@ schema:
     customProperties:
       - property: modelgenLoadedAtField
         value: RECEIVED_AT
+      # The SOURCE column identifying the data subject. Encrypted
+      # deterministically, and the keystore lookup for every other
+      # classified column on the row.
+      - property: modelgenSubjectField
+        value: USER_ID
       - property: modelgenRaw
         value:
           dataset: raw
@@ -66,12 +81,10 @@ schema:
       - property: modelgenStaging
         value:
           dataset: staging
-          incrementalStrategy: merge
-          partitionBy:
-            field: received_at
-            dataType: timestamp
-            granularity: day
-          clusterBy: [user_id]
+          materialization: snapshot
+          # Not user_id: it is classified, so it lands as BYTES and
+          # BigQuery cannot cluster on BYTES.
+          clusterBy: [event_id]
 
     properties:
       - name: event_id
@@ -90,6 +103,9 @@ schema:
         physicalType: STRING
         description: "The ID of the user who signed up."
         required: true
+        # The subject. DETERMINISTIC_ENCRYPT — ciphertext is stable per
+        # keyset, so joins and counts survive the crypto-shred.
+        classification: pii
 
       - name: signup_method
         physicalName: SIGNUP_METHOD
@@ -114,3 +130,6 @@ schema:
         logicalType: string
         physicalType: STRING
         description: "ISO 3166-1 alpha-2 country code."
+        # Payload. Randomised AEAD.ENCRYPT — no stable ciphertext to
+        # correlate across rows.
+        classification: psi

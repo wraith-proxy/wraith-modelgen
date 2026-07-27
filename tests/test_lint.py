@@ -42,6 +42,7 @@ def base_contract() -> EventContract:
         ),
         staging=StagingConfig(
             dataset="staging",
+            materialization="incremental",
             incremental_strategy="merge",
             partition_by=PartitionConfig("received_at", "timestamp", "day"),
             cluster_by=["user_id"],
@@ -271,9 +272,197 @@ class TestStagingColumnChecks:
 
     def test_empty_staging_skips_column_checks(self):
         def mutate(c):
-            c.staging = StagingConfig(dataset="staging", columns=[])
+            c.staging = StagingConfig(
+                dataset="staging",
+                materialization="incremental",
+                incremental_strategy="merge",
+                columns=[],
+            )
 
         assert error_codes(contract_with(mutate)) == set()
+
+
+def snapshot_contract() -> EventContract:
+    c = base_contract()
+    c.staging.materialization = "snapshot"
+    c.staging.incremental_strategy = "insert_overwrite"
+    c.staging.partition_by = PartitionConfig("ds", "date", "day")
+    return c
+
+
+def snapshot_with(mutate) -> EventContract:
+    c = snapshot_contract()
+    mutate(c)
+    return c
+
+
+class TestSnapshotChecks:
+    def test_clean_snapshot_has_no_errors(self):
+        assert error_codes(snapshot_contract()) == set()
+
+    def test_unknown_materialization_rejected(self):
+        codes = error_codes(
+            snapshot_with(
+                lambda c: setattr(c.staging, "materialization", "snapshto")
+            )
+        )
+        assert "invalid-staging-materialization" in codes
+
+    def test_strategy_conflicting_with_snapshot_rejected(self):
+        codes = error_codes(
+            snapshot_with(
+                lambda c: setattr(c.staging, "incremental_strategy", "merge")
+            )
+        )
+        assert "snapshot-strategy-conflict" in codes
+
+    def test_snapshot_partitioned_on_other_column_rejected(self):
+        codes = error_codes(
+            snapshot_with(
+                lambda c: setattr(
+                    c.staging, "partition_by", PartitionConfig("received_at")
+                )
+            )
+        )
+        assert "snapshot-partition-not-ds" in codes
+
+    def test_snapshot_without_partition_rejected(self):
+        codes = error_codes(
+            snapshot_with(lambda c: setattr(c.staging, "partition_by", None))
+        )
+        assert "snapshot-partition-not-ds" in codes
+
+    def test_property_may_not_claim_the_ds_name(self):
+        def mutate(c):
+            c.staging.columns[1].name = "ds"
+
+        assert "ds-column-reserved" in error_codes(snapshot_with(mutate))
+
+    def test_ds_is_a_valid_cluster_target(self):
+        # ds is generated, not declared, so the declared-column checks must
+        # know about it.
+        def mutate(c):
+            c.staging.cluster_by = ["ds"]
+
+        assert "cluster-column-not-in-staging" not in error_codes(
+            snapshot_with(mutate)
+        )
+
+
+def classified_contract() -> EventContract:
+    """Subject + one payload column. Cluster and partition are moved off
+    the ciphertext, since BigQuery supports neither on BYTES."""
+    c = base_contract()
+    c.subject_field = "USER_ID"
+    c.staging.cluster_by = ["event_id"]
+    subject = next(col for col in c.staging.columns if col.source == "USER_ID")
+    subject.classification = "pii"
+    subject.tests = [ColumnTest("not_null")]
+    c.staging.columns.append(
+        StagingColumn("EMAIL", "email", "STRING", "Email.", [], "psi")
+    )
+    return c
+
+
+def classified_with(mutate) -> EventContract:
+    c = classified_contract()
+    mutate(c)
+    return c
+
+
+class TestClassificationChecks:
+    def test_clean_classified_contract_has_no_errors(self):
+        assert error_codes(classified_contract()) == set()
+
+    def test_unknown_classification_rejected(self):
+        def mutate(c):
+            c.staging.columns[-1].classification = "secret-ish"
+
+        assert "invalid-classification" in error_codes(classified_with(mutate))
+
+    def test_subject_field_must_be_declared(self):
+        assert "subject-field-not-declared" in error_codes(
+            classified_with(lambda c: setattr(c, "subject_field", ""))
+        )
+
+    def test_subject_field_must_be_a_staging_column(self):
+        assert "subject-field-not-in-staging" in error_codes(
+            classified_with(lambda c: setattr(c, "subject_field", "NOPE"))
+        )
+
+    def test_subject_field_must_itself_be_classified(self):
+        # Otherwise the join key is materialised in plaintext — the one
+        # column that must not be.
+        def mutate(c):
+            next(
+                col for col in c.staging.columns if col.source == "USER_ID"
+            ).classification = ""
+
+        assert "subject-field-unclassified" in error_codes(
+            classified_with(mutate)
+        )
+
+    def test_enumerated_column_may_not_be_classified(self):
+        def mutate(c):
+            c.staging.columns[-1].tests = [
+                ColumnTest("accepted_values", {"values": ["a", "b"]})
+            ]
+
+        assert "classified-column-enumerated" in error_codes(
+            classified_with(mutate)
+        )
+
+    def test_cluster_on_ciphertext_rejected(self):
+        # BigQuery cannot cluster on BYTES.
+        assert "cluster-column-classified" in error_codes(
+            classified_with(
+                lambda c: setattr(c.staging, "cluster_by", ["user_id"])
+            )
+        )
+
+    def test_partition_on_ciphertext_rejected(self):
+        assert "partition-field-classified" in error_codes(
+            classified_with(
+                lambda c: setattr(
+                    c.staging, "partition_by", PartitionConfig("user_id")
+                )
+            )
+        )
+
+    def test_incremental_loaded_at_may_not_be_classified(self):
+        # The high-water-mark filter would compare a timestamp against
+        # ciphertext.
+        def mutate(c):
+            next(
+                col for col in c.staging.columns if col.source == "RECEIVED_AT"
+            ).classification = "psi"
+
+        assert "loaded-at-classified" in error_codes(classified_with(mutate))
+
+    def test_snapshot_loaded_at_may_be_classified(self):
+        # A snapshot has no incremental filter, so nothing breaks.
+        def mutate(c):
+            c.staging.materialization = "snapshot"
+            c.staging.incremental_strategy = "insert_overwrite"
+            c.staging.partition_by = PartitionConfig("ds", "date", "day")
+            next(
+                col for col in c.staging.columns if col.source == "RECEIVED_AT"
+            ).classification = "psi"
+
+        assert error_codes(classified_with(mutate)) == set()
+
+    def test_untested_subject_warns(self):
+        def mutate(c):
+            next(
+                col for col in c.staging.columns if col.source == "USER_ID"
+            ).tests = []
+
+        assert "subject-field-untested" in warning_codes(
+            classified_with(mutate)
+        )
+
+    def test_unclassified_contract_skips_all_of_it(self):
+        assert error_codes(base_contract()) == set()
 
 
 class TestWarnings:

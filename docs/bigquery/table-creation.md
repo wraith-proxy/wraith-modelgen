@@ -64,7 +64,7 @@ CALL `project.utils.create_table_explicit`(
     'event_ts',
     'account_id_hashed, event_type',
     'Staged events with typed STRUCT enrichment',
-    '("layer","staging"),("scd_type","type-2")'
+    '("layer","staging"),("grain","ds-snapshot")'
 );
 ```
 
@@ -78,7 +78,7 @@ Promotes schema from one managed table to another. Uses `AS SELECT * WHERE FALSE
 
 ```sql
 CALL `project.utils.create_table_clone_schema`(
-    'my-project', 'staging', 'stg_account_scd2',  -- source
+    'my-project', 'staging', 'stg__account_events',  -- source (ds base)
     'my-project', 'marts',   'dim_accounts',        -- target
     'valid_from',
     'account_id_hashed',

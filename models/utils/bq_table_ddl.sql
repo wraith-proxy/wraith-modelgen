@@ -140,7 +140,7 @@ END;
 --     'event_ts',
 --     'account_id_hashed, event_type',
 --     'Staged and typed account events with STRUCT enrichment payload',
---     '("owner","data-engineering"),("layer","staging"),("scd_type","type-2")'
+--     '("owner","data-engineering"),("layer","staging"),("grain","ds-snapshot")'
 -- );
 
 
