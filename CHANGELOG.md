@@ -5,193 +5,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
-
-### Changed
-
-- **Staging defaults to a datestamped daily snapshot** instead of a merge incremental: `insert_overwrite` partitioned on a generated `ds` column, one full copy of the dimension per day. History is `where ds = '<date>'`; backfills run in parallel via `--vars '{ds: ...}'`. `materialization: incremental` on `modelgenStaging` opts back into the old high-water-mark load.
-- Generated `unique` test is now scoped to `(key, ds)` to match the snapshot grain.
-- `modelgen gen`/`run` fall back to `--from-contract` automatically when no BigQuery credentials are found, matching how CI already ran it.
-
-### Added
-
-- **Classification-driven encryption.** A property marked `classification: pii` or `psi` is encrypted on the way into staging and never materialised in plaintext: `pii` (the subject key) gets `DETERMINISTIC_ENCRYPT` so ciphertext stays stable per keyset and joins/counts/aggregates survive erasure; everything else (`psi`) gets randomised `AEAD.ENCRYPT`. `modelgenSubjectField` declares which property the row's keyset is scoped to.
-- `models/utils/bq_keystore.sql`: keystore schema and `shred_subject` procedure. Right to erasure is one `DELETE` of a subject's keystore row; every ciphertext written under that subject's DEK becomes unrecoverable across every table without rewriting a partition.
-- `docs/bigquery/keystore.md`: key hierarchy (CMEK vs KEK vs DEK), why each subject gets two DEKs, erasure timeline (time travel + fail-safe window), and citations.
-
----
-
-## [0.11.0] - 2026-06-21
-
-### Changed
-
-- **Contracts realigned to [Open Data Contract Standard (ODCS) v3.0.2](https://github.com/bitol-io/open-data-contract-standard).** Bundled ODCS JSON schema validates structure before semantic linting runs. `event.source.*` / `event.raw.*` / `event.staging.*` become an ODCS `schema[]` entry with `servers`, `properties`, and modelgen's BigQuery/dbt specifics riding in `customProperties` (`modelgenLoadedAtField`, `modelgenRaw`, `modelgenStaging`).
-- Column declarations move from `source:`/`name:`/`type:`/`tests:` to ODCS `physicalName`/`name`/`physicalType`, with `required: true` / `unique: true` / `quality: [{rule: validValues, ...}]` driving the same `not_null` / `unique` / `accepted_values` dbt tests.
-- `unique_key` and `loaded_at_field` become `primaryKey` / `primaryKeyPosition` properties and the `modelgenLoadedAtField` custom property, respectively.
-- Every lint code and message updated to reference ODCS field locations (`docs/linting.md`).
-- `contracts/example_contract.yml`, `docs/reference.md`, `docs/architecture.md`, `docs/usage.md`, README contract anatomy section: rewritten for ODCS.
-
----
-
-## [0.10.0] - 2026-06-12
-
-### Added
-
-- **`modelgen new`**: introspects a live BigQuery table and drafts a first-pass contract — every column with introspected types and descriptions, `unique_key`/`loaded_at_field` guessed from naming and type heuristics (flagged for confirmation), partition config derived from the loaded-at column, dbt tests pre-wired on the key. Output is deterministic and passes lint.
-- **`modelgen init`**: scaffolds the standard project layout (`.modelgen.yml`, `contracts/`, `models/`). `init` → `new` → `run` takes a blank repo to generated models in three commands.
-- **`modelgen check`**: renders every contract in memory and diffs against what's on disk without writing anything. Reports in-sync / drift / missing per file, `--diff` prints unified diffs, exits non-zero on drift or contract error — the determinism guarantee becomes an enforceable CI gate. CI now runs `modelgen check --from-contract --diff` against the repo's own example contract.
-- **Semantic contract linting** (new `lint` module) and `modelgen validate --strict`: invalid incremental strategies, non-BigQuery cast types, duplicate column declarations, unsafe identifiers, partition/cluster references to undeclared staging columns, and `unique_key`/`loaded_at_field` columns staging never selects, all reported in one pass. `gen` and `run` refuse contracts with lint errors before generating anything.
-- `docs/linting.md`: full lint rule catalogue. `docs/usage.md`: full `init → new → validate → run → check` lifecycle walkthrough with CI recipe and exit-code table.
-- `EventContract.from_text` for parsing contracts without touching the filesystem.
-- `py.typed` shipped in the wheel.
-
-### Fixed
-
-- `modelgen --version` was hardcoded to `0.0.1` while the package shipped as `0.9.0`; now reads installed package metadata.
-- `BigQueryIntrospector` caches `get_columns` per table for the process lifetime, halving BigQuery API calls in `run` and `check` where raw and staging introspect the same source.
-- Error reporting in `run` and `check` is markup-escaped so bracketed text is no longer swallowed by Rich.
-
----
-
-## [0.9.0] - 2026-05-20
-
-### Changed
-
-- BigQuery engineering docs: prose tidied, example values genericised, lipstick applied.
-
----
-
-## [0.8.0] - 2026-05-20
-
-### Changed
-
-- BigQuery reference docs reorganised from flat `docs/bq-*.md` into `docs/bigquery/` subdirectory.
-- `docs/bigquery/architecture.md`: OLTP vs OLAP table expanded; stack layer diagram and dataset naming convention clarified.
-- `docs/bigquery/decisions.md`: All decisions reviewed; reasoning tightened.
-- `docs/bigquery/historical-backfill.md`: Orchestration script example rewritten to use declared variables throughout; idempotency guard and cutoff date sections expanded.
-- `docs/bigquery/overview.md`: Added.
-- `docs/bigquery/scd2.md`: Revised.
-- `docs/bigquery/table-creation.md`: Revised.
-- `mkdocs.yml`: Navigation updated for new doc structure.
-
----
-
-## [0.7.0] - 2026-05-20
-
-### Added
-
-- Six parameterised BigQuery stored procedures under `models/utils/`:
-  - `bq_table_ddl.sql`: DDL bootstrap for raw, staging, and mart tables.
-  - `bq_historical_backfill.sql`: One-off historical load with idempotency guard and verification procedure.
-  - `bq_stg_scd2.sql`: SCD Type 2 full rebuild and MERGE incremental procedures.
-  - `bq_struct_contract.sql`: STRUCT introspection and data contract validation against `COLUMN_FIELD_PATHS`.
-- Six engineering reference docs under `docs/` covering BigQuery architecture, tooling decisions, table creation, SCD2, historical backfill, and procedure reference.
-
-### Fixed
-
-- Removed unused `verify_sql` variable from `historical_backfill` procedure.
-- Added `tiebreak_col` parameter to `rebuild_scd2`; simultaneous-event dedup within a `QUALIFY` partition was previously non-deterministic.
-- Fixed doc paths (`raw/scripts` → `models/utils`) and removed broken reference links.
-
----
-
-## [0.6.0] - 2026-05-18
-
-### Added
-
-- `contracts/example_contract.yml`: Annotated example contract for offline development and documentation.
-- `models/raw/` and `models/staging/` subdirectories; generated models now written into layer-specific directories.
-
-### Changed
-
-- GCP credentials no longer required at import time. Credential resolution deferred to `gen` invocation; `introspect.py` and `cli.py` updated accordingly.
-- Raw template (`src/templates/raw.sql.j2`) updated.
-- Tests updated to cover credential-free operation.
-
----
-
-## [0.5.0] - 2026-05-17
-
-### Added
-
-- Coverage badge in `README.md` and `docs/index.md`; rendered from `docs/coverage.svg` via the pages CI pipeline.
-- `mkdocs.yml`: `pymdownx.superfences` with Mermaid custom fence, `admonition`, and `pymdownx.details` extensions enabled.
-- `docs/architecture.md`: Three Mermaid diagrams (generation pipeline with module subgraphs, two-layer model, schema evolution decision tree). ASCII art removed.
-- `docs/usage.md`: Full workflow Mermaid flowchart. `modelgen run` was undocumented; added with options table, `.modelgen.yml` reference, and examples.
-- `docs/reference.md`: Contract structure `classDiagram`. Generated file sections expanded with real example SQL. Type mapping table for REPEATED/RECORD modes.
-- `docs/security.md`: Credential resolution replaced with Mermaid flowchart. Second diagram showing what wraith-modelgen accesses vs. never accesses (row data). Vulnerability reporting section added.
-- `CHANGELOG.md`: Reconstructed from git history with accurate per-version content, no duplicate stubs, no empty commitizen entries.
-
-### Changed
-
-- CLI help text updated throughout. Commands now describe what they actually do.
-- `modelgen gen`: flags and docstring clarified; error message updated.
-- `modelgen validate`: docstring rewritten to explain offline behaviour.
-- `modelgen run`: docstring updated; inline comments cleaned up.
-- Version output: `👻 modelgen 0.x.x`.
-- Rich panels upgraded with subtitles and aligned keys. `⚠` added to schema evolution warnings.
-- Error messages include remediation hints.
-- `.pre-commit-config.yaml`: `check-yaml` gets `--unsafe` flag to allow `!!python/name:` Python YAML tags in `mkdocs.yml`.
-- All em-dashes replaced with standard punctuation throughout docs, CLI, and CHANGELOG. Contrarian and AI-pattern phrasing removed from help text, docstrings, and prose.
-
----
-
-## [0.4.0] - 2026-05-16
-
-### Changed
-
-- `pyproject.toml` project URLs corrected: Repository gets `.git` suffix, Documentation points to live MkDocs site, Changelog URL uses Gitea's `src/branch/main/` path.
-
----
-
-## [0.3.0] - 2026-05-16
-
-Ghost Stack branding pass. The tool already worked.
-
-### Changed
-
-- `README.md` rewritten with Ghost Stack voice, sovereign principles section, schema evolution table, and contract anatomy reference.
-- All docs pages (`architecture.md`, `index.md`, `reference.md`, `security.md`, `usage.md`) updated to match.
-- `pyproject.toml` description, keywords, and classifiers tightened.
-
----
-
-## [0.2.0] - 2026-05-16
-
-### Added
-
-- `genbadge[coverage]` dependency; CI now generates `docs/coverage.svg` from `coverage.xml` on every pages deploy.
-- Coverage badge SVG committed to `docs/` so it is available in the built site immediately.
-
----
-
-## [0.1.0] - 2026-05-16
-
-First proper release. Not backwards compatible with any pre-release state.
-
-### Added
-
-- **BigQuery-native introspection.** `google-cloud-bigquery` replaces SQLAlchemy. Introspection runs at `gen` time; no standalone `introspect` command, no warehouse-specific extras.
-- **Two-layer generation.** `--raw` and `--staging` are mutually exclusive flags. One layer per invocation; `--layer all` is gone.
-  - Raw: `select *` pass-through incremental model. New source columns flow through automatically.
-  - Staging: explicit column selection with renames, casts, and `not_null`/`unique` tests from the contract.
-- **Contract format.** `unique_key` and `loaded_at_field` name source-side columns. Staging columns declare both `source:` and `name:` explicitly.
-- **`modelgen run` command.** Discovers all contracts via `.modelgen.yml` (or opinionated defaults) and regenerates every layer.
-- **`modelgen validate` command.** Offline contract validation (no BigQuery credentials needed).
-- **`partition_by` / `cluster_by`** config per layer (BigQuery-specific).
-- **Composite `unique_key`** support: single string or YAML list.
-- **Schema drift validation.** Contract references a column not found in source; generation fails with the column name. No silent passes.
-- **Schema evolution notifications.** New source columns not yet in staging are reported in CLI output.
-- **`IntrospectedColumn.dbt_data_type`** handles REPEATED mode (wraps in `ARRAY<>`) and RECORD type (renders as `STRUCT`).
-- **Determinism guarantee.** Same contract + same source schema = byte-identical output files. CI can diff committed output to catch drift.
-- **`FakeIntrospector`** for tests and offline development. Full test suite runs without BigQuery credentials.
-- **Structured error types:** `ContractError`, `GenerationError`, `IntrospectionError`.
-- **Rich CLI output.** Panels, tables, and colour via `rich`. `--verbose` / `-v` for debug logging.
-- **CI/CD.** Gitea Actions for test-and-verify, pages deploy (MkDocs + coverage badge), and sovereign release (commitizen version bump).
-- **`CONTRIBUTING.md`**, `LICENSE` (MIT), CODEOWNERS, PR template.
-
----
-
-## [0.0.1] - 2026-05-16
 
 Initial commit. Ghost Stack project scaffold. Nothing generated yet.
+
+## v0.12.0 (2026-07-27)
+
+## v0.11.0 (2026-06-21)
+
+## v0.10.0 (2026-06-12)
+
+## v0.9.0 (2026-05-20)
+
+## v0.8.0 (2026-05-20)
+
+## v0.7.0 (2026-05-20)
+
+## v0.6.0 (2026-05-18)
+
+## v0.5.0 (2026-05-17)
+
+## v0.4.0 (2026-05-16)
+
+## v0.3.0 (2026-05-16)
+
+## v0.2.0 (2026-05-16)
+
+## v0.1.0 (2026-05-16)
