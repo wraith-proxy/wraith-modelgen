@@ -5,6 +5,54 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Staging defaults to a datestamped daily snapshot** instead of a merge incremental: `insert_overwrite` partitioned on a generated `ds` column, one full copy of the dimension per day. History is `where ds = '<date>'`; backfills run in parallel via `--vars '{ds: ...}'`. `materialization: incremental` on `modelgenStaging` opts back into the old high-water-mark load.
+- Generated `unique` test is now scoped to `(key, ds)` to match the snapshot grain.
+- `modelgen gen`/`run` fall back to `--from-contract` automatically when no BigQuery credentials are found, matching how CI already ran it.
+
+### Added
+
+- **Classification-driven encryption.** A property marked `classification: pii` or `psi` is encrypted on the way into staging and never materialised in plaintext: `pii` (the subject key) gets `DETERMINISTIC_ENCRYPT` so ciphertext stays stable per keyset and joins/counts/aggregates survive erasure; everything else (`psi`) gets randomised `AEAD.ENCRYPT`. `modelgenSubjectField` declares which property the row's keyset is scoped to.
+- `models/utils/bq_keystore.sql`: keystore schema and `shred_subject` procedure. Right to erasure is one `DELETE` of a subject's keystore row; every ciphertext written under that subject's DEK becomes unrecoverable across every table without rewriting a partition.
+- `docs/bigquery/keystore.md`: key hierarchy (CMEK vs KEK vs DEK), why each subject gets two DEKs, erasure timeline (time travel + fail-safe window), and citations.
+
+---
+
+## [0.11.0] - 2026-06-21
+
+### Changed
+
+- **Contracts realigned to [Open Data Contract Standard (ODCS) v3.0.2](https://github.com/bitol-io/open-data-contract-standard).** Bundled ODCS JSON schema validates structure before semantic linting runs. `event.source.*` / `event.raw.*` / `event.staging.*` become an ODCS `schema[]` entry with `servers`, `properties`, and modelgen's BigQuery/dbt specifics riding in `customProperties` (`modelgenLoadedAtField`, `modelgenRaw`, `modelgenStaging`).
+- Column declarations move from `source:`/`name:`/`type:`/`tests:` to ODCS `physicalName`/`name`/`physicalType`, with `required: true` / `unique: true` / `quality: [{rule: validValues, ...}]` driving the same `not_null` / `unique` / `accepted_values` dbt tests.
+- `unique_key` and `loaded_at_field` become `primaryKey` / `primaryKeyPosition` properties and the `modelgenLoadedAtField` custom property, respectively.
+- Every lint code and message updated to reference ODCS field locations (`docs/linting.md`).
+- `contracts/example_contract.yml`, `docs/reference.md`, `docs/architecture.md`, `docs/usage.md`, README contract anatomy section: rewritten for ODCS.
+
+---
+
+## [0.10.0] - 2026-06-12
+
+### Added
+
+- **`modelgen new`**: introspects a live BigQuery table and drafts a first-pass contract — every column with introspected types and descriptions, `unique_key`/`loaded_at_field` guessed from naming and type heuristics (flagged for confirmation), partition config derived from the loaded-at column, dbt tests pre-wired on the key. Output is deterministic and passes lint.
+- **`modelgen init`**: scaffolds the standard project layout (`.modelgen.yml`, `contracts/`, `models/`). `init` → `new` → `run` takes a blank repo to generated models in three commands.
+- **`modelgen check`**: renders every contract in memory and diffs against what's on disk without writing anything. Reports in-sync / drift / missing per file, `--diff` prints unified diffs, exits non-zero on drift or contract error — the determinism guarantee becomes an enforceable CI gate. CI now runs `modelgen check --from-contract --diff` against the repo's own example contract.
+- **Semantic contract linting** (new `lint` module) and `modelgen validate --strict`: invalid incremental strategies, non-BigQuery cast types, duplicate column declarations, unsafe identifiers, partition/cluster references to undeclared staging columns, and `unique_key`/`loaded_at_field` columns staging never selects, all reported in one pass. `gen` and `run` refuse contracts with lint errors before generating anything.
+- `docs/linting.md`: full lint rule catalogue. `docs/usage.md`: full `init → new → validate → run → check` lifecycle walkthrough with CI recipe and exit-code table.
+- `EventContract.from_text` for parsing contracts without touching the filesystem.
+- `py.typed` shipped in the wheel.
+
+### Fixed
+
+- `modelgen --version` was hardcoded to `0.0.1` while the package shipped as `0.9.0`; now reads installed package metadata.
+- `BigQueryIntrospector` caches `get_columns` per table for the process lifetime, halving BigQuery API calls in `run` and `check` where raw and staging introspect the same source.
+- Error reporting in `run` and `check` is markup-escaped so bracketed text is no longer swallowed by Rich.
+
+---
+
 ## [0.9.0] - 2026-05-20
 
 ### Changed
@@ -147,25 +195,3 @@ First proper release. Not backwards compatible with any pre-release state.
 ## [0.0.1] - 2026-05-16
 
 Initial commit. Ghost Stack project scaffold. Nothing generated yet.
-
-## v0.11.0 (2026-06-21)
-
-## v0.10.0 (2026-06-12)
-
-## v0.9.0 (2026-05-20)
-
-## v0.8.0 (2026-05-20)
-
-## v0.7.0 (2026-05-20)
-
-## v0.6.0 (2026-05-18)
-
-## v0.5.0 (2026-05-17)
-
-## v0.4.0 (2026-05-16)
-
-## v0.3.0 (2026-05-16)
-
-## v0.2.0 (2026-05-16)
-
-## v0.1.0 (2026-05-16)
