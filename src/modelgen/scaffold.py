@@ -3,7 +3,7 @@ Contract and project scaffolding.
 
 `draft_contract` reverses the usual flow: instead of a contract driving
 introspection, introspection drives a first-draft contract. The draft is
-deliberately conservative — every guess is marked with a TODO so a human
+deliberately conservative: every guess is marked with a TODO so a human
 confirms the keys before the contract becomes load-bearing.
 """
 
@@ -203,7 +203,7 @@ def init_project(root: Path) -> list[Path]:
     config = root / ".modelgen.yml"
     if config.exists():
         raise ScaffoldError(
-            f"{config} already exists — this project is initialised."
+            f"{config} already exists. This project is initialised."
         )
     created: list[Path] = []
     root.mkdir(parents=True, exist_ok=True)

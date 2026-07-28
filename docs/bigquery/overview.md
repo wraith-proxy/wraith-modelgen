@@ -6,12 +6,12 @@ Technical reference for BigQuery data engineering patterns. Companion to `models
 
 | Doc | What it covers |
 |---|---|
-| [Architecture](architecture.md) | Stack overview — TF vs dbt, OLTP vs OLAP, layer responsibilities |
-| [Table Creation](table-creation.md) | DDL patterns — schema inference, explicit schema, clone |
+| [Architecture](architecture.md) | Stack overview: TF vs dbt, OLTP vs OLAP, layer responsibilities |
+| [Table Creation](table-creation.md) | DDL patterns: schema inference, explicit schema, clone |
 | [Historical Backfill](historical-backfill.md) | One-off historical load procedure and orchestration |
 | [SCD Type 2](scd2.md) | `ds` snapshots as the default; SCD2 as the regulated carve-out |
 | [Keystore](keystore.md) | CMEK / KEK / DEK, and crypto-shred erasure for RTBF |
-| [Tooling Decisions](decisions.md) | Why `ds` over SCD2, why crypto-shred over delete, why not Liquibase, why not Terraform for tables, why not materialised views |
+| [Tooling Decisions](decisions.md) | Why `ds` over SCD2, why crypto-shred over delete, why incremental over full rebuild, why not Terraform for tables, why not materialised views |
 
 ## Scripts
 
@@ -39,7 +39,7 @@ models/utils/
 | `utils.rebuild_scd2` | bq_stg_scd2.sql | Full CREATE OR REPLACE SCD2 over the `ds` base |
 | `utils.validate_scd2` | bq_stg_scd2.sql | Three SCD2 quality checks |
 | `keystore.issue_keyset` | bq_keystore.sql | Mint a subject's wrapped DEKs (idempotent) |
-| `keystore.shred_subject` | bq_keystore.sql | Crypto-shred one subject — the one delete |
+| `keystore.shred_subject` | bq_keystore.sql | Crypto-shred one subject, the one delete |
 | `keystore.verify_shred` | bq_keystore.sql | Assert the keyset is gone |
 | `utils.introspect_schema` | bq_struct_contract.sql | Full schema including STRUCT sub-fields |
 | `utils.validate_data_contract` | bq_struct_contract.sql | Assert field paths and types match contract |

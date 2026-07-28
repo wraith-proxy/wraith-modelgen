@@ -32,7 +32,7 @@ _DS_COLUMN = f"{_DS_VALUE} as ds"
 _DS_TEST_WHERE = f"ds = {_DS_VALUE}"
 
 # The keystore is a convention, not a contract: one per warehouse, declared
-# as a dbt source. It is deliberately not a modelgen model — a snapshot of
+# as a dbt source. It is deliberately not a modelgen model: a snapshot of
 # it would be a second copy of the thing whose deletion is the erasure.
 _KEYSTORE = "{{ source('keystore', 'subject_keys') }}"
 _AAD = "_modelgen_aad"
@@ -168,7 +168,7 @@ def _yml_column(col: StagingColumn, snapshot: bool) -> StagingColumn:
     """Rewrite a contract column into what the schema.yml should declare.
 
     A snapshot's grain is (key, ds), so a bare unique test fails as soon as
-    a second partition lands — scope it to the partition this run writes,
+    a second partition lands, so scope it to the partition this run writes,
     as a literal so BigQuery prunes to it instead of scanning history. A
     classified column arrives as BYTES, whatever its plaintext type was.
     """
@@ -258,6 +258,7 @@ def render_raw(
         "event": contract,
         "contract_path": contract_path,
         "introspected_columns": cols,
+        "freshness": contract.raw.freshness,
         "raw_source_cols": raw_source_cols,
         "raw_dedup_cols": raw_dedup_cols,
         "raw_final_cols": raw_final_cols,

@@ -1,4 +1,4 @@
-# modelgen data contract — Open Data Contract Standard (ODCS) v3.0.2.
+# modelgen data contract. Open Data Contract Standard (ODCS) v3.0.2.
 # Source-of-truth for one event/entity. Source teams maintain this as part of
 # their release process.
 #
@@ -12,6 +12,9 @@
 #   - required/unique/validValues map to dbt not_null/unique/accepted_values.
 #   - schema.customProperties carries modelgenLoadedAtField + the raw/staging
 #     dbt layer config (dataset, materialization, partitioning, dedup).
+#   - modelgenExempt opts out of one lint rule and requires a reason. Valid on
+#     schema.customProperties (contract-scoped) or on a property's own
+#     customProperties (that column only). See docs/linting.md.
 #
 # Staging materialises as a datestamped daily snapshot: one full copy of the
 # dimension per `ds` partition, so history is `where ds = '<date>'` and any
@@ -21,7 +24,7 @@
 # generation time, the same seam that turns `required: true` into a
 # not_null test with no human in the loop. A classified property is
 # encrypted on the way into staging and never materialised in plaintext.
-# Erasure is one DELETE from the keystore — see docs/bigquery/keystore.md.
+# Erasure is one DELETE from the keystore. See docs/bigquery/keystore.md.
 #
 # Schema evolution:
 #   - NEW source columns: appear in raw automatically. Invisible in staging
@@ -78,6 +81,11 @@ schema:
             dataType: timestamp
             granularity: day
           clusterBy: [USER_ID]
+          # dbt source freshness. The landing table loads hourly, so
+          # half a day behind is worth a look and a full day is broken.
+          freshness:
+            warnAfter: {count: 12, period: hour}
+            errorAfter: {count: 24, period: hour}
       - property: modelgenStaging
         value:
           dataset: staging
@@ -91,7 +99,9 @@ schema:
         physicalName: EVENT_ID
         logicalType: string
         physicalType: STRING
-        description: "Unique identifier for this event."
+        description:
+          "Idempotency key for this signup event. Unique per emission,
+           stable across replays, and the join key downstream."
         primaryKey: true
         primaryKeyPosition: 1
         required: true
@@ -101,9 +111,11 @@ schema:
         physicalName: USER_ID
         logicalType: string
         physicalType: STRING
-        description: "The ID of the user who signed up."
+        description:
+          "Account that completed signup. Encrypted deterministically,
+           so joins and distinct counts still work on the ciphertext."
         required: true
-        # The subject. DETERMINISTIC_ENCRYPT — ciphertext is stable per
+        # The subject. DETERMINISTIC_ENCRYPT keeps ciphertext stable per
         # keyset, so joins and counts survive the crypto-shred.
         classification: pii
 
@@ -111,7 +123,9 @@ schema:
         physicalName: SIGNUP_METHOD
         logicalType: string
         physicalType: STRING
-        description: "How the user signed up."
+        description:
+          "Which signup route the user came through. Constrained to the
+           validValues below; a new route needs a contract change."
         required: true
         quality:
           - type: library
@@ -122,14 +136,18 @@ schema:
         physicalName: RECEIVED_AT
         logicalType: date
         physicalType: TIMESTAMP
-        description: "When the event was received by the ingestion pipeline."
+        description:
+          "When the ingestion pipeline received the event, not when the
+           user acted. Drives the incremental high-water mark."
         required: true
 
       - name: country_code
         physicalName: COUNTRY_CODE
         logicalType: string
         physicalType: STRING
-        description: "ISO 3166-1 alpha-2 country code."
-        # Payload. Randomised AEAD.ENCRYPT — no stable ciphertext to
-        # correlate across rows.
+        description:
+          "ISO 3166-1 alpha-2 country the signup came from, resolved at
+           ingestion. Null when the IP lookup found nothing."
+        # Payload. Randomised AEAD.ENCRYPT, so there is no stable
+        # ciphertext to correlate across rows.
         classification: psi

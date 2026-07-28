@@ -8,6 +8,15 @@ sources:
       - name: {{ event.source.table }}
         description: "Landed {{ event.name }} events. Source schema as observed at gen time."
         loaded_at_field: {{ event.loaded_at_field }}
+{% if freshness %}
+        freshness:
+{% if freshness.warn_after %}
+          warn_after: {count: {{ freshness.warn_after.count }}, period: {{ freshness.warn_after.period }}}
+{% endif %}
+{% if freshness.error_after %}
+          error_after: {count: {{ freshness.error_after.count }}, period: {{ freshness.error_after.period }}}
+{% endif %}
+{% endif %}
         columns:
 {% for col in introspected_columns %}
           - name: {{ col.name }}

@@ -42,15 +42,15 @@ WHERE valid_from <= TIMESTAMP('2024-08-01')
   AND (valid_to > TIMESTAMP('2024-08-01') OR valid_to IS NULL)
 ```
 
-## `utils.rebuild_scd2` — Derive SCD2 From the Snapshots
+## `utils.rebuild_scd2`: Derive SCD2 From the Snapshots
 
 `CREATE OR REPLACE TABLE ... AS SELECT` with a `LEAD()` window for
 `valid_to`. Full rebuild, every run. Always correct, simple to debug, and
 cheap because the `ds` base it reads is already partitioned.
 
 There is no incremental MERGE variant. `merge_scd2` was removed in
-TJP-27071: it carried the failure modes — late-arriving data, dedup edge
-cases, MERGE bugs that only surface on a specific event sequence — and its
+TJP-27071: it carried the failure modes (late-arriving data, dedup edge
+cases, MERGE bugs that only surface on a specific event sequence) and its
 own documentation already said not to reach for it until you had a measured
 cost problem you almost certainly never had.
 
@@ -82,7 +82,7 @@ CALL `project.utils.rebuild_scd2`(
 
 1. `source_events` CTE: applies `select_cols` projection to source table
 2. `scd2` CTE: `LEAD(event_ts)` over `PARTITION BY unique_key ORDER BY event_ts` → `valid_to`
-3. `QUALIFY ROW_NUMBER() = 1` deduplicates simultaneous events using caller-supplied `tiebreak_col` (pass `event_type` for alphabetical ordering — arbitrary but stable)
+3. `QUALIFY ROW_NUMBER() = 1` deduplicates simultaneous events using caller-supplied `tiebreak_col` (pass `event_type` for alphabetical ordering, arbitrary but stable)
 4. `CREATE OR REPLACE TABLE` atomically replaces target
 
 ## Validation: `utils.validate_scd2`
@@ -125,7 +125,7 @@ distinction.
 
 ## Related
 
-- [Architecture](architecture.md) — OLTP vs OLAP, why SCD2 belongs in BQ
-- [Tooling Decisions](decisions.md) — why `ds` replaced SCD2 as the default
-- `models/utils/bq_struct_contract.sql` — contract validation after rebuild
-- `models/utils/bq_stg_scd2.sql` — procedure implementations
+- [Architecture](architecture.md): OLTP vs OLAP, why SCD2 belongs in BQ
+- [Tooling Decisions](decisions.md): why `ds` replaced SCD2 as the default
+- `models/utils/bq_struct_contract.sql`: contract validation after rebuild
+- `models/utils/bq_stg_scd2.sql`: procedure implementations

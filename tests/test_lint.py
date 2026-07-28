@@ -12,6 +12,9 @@ import pytest
 from modelgen.contract import (
     ColumnTest,
     EventContract,
+    Exemption,
+    FreshnessConfig,
+    FreshnessThreshold,
     PartitionConfig,
     RawConfig,
     SourceRef,
@@ -19,6 +22,7 @@ from modelgen.contract import (
     StagingConfig,
 )
 from modelgen.lint import (
+    _MIN_DESCRIPTION_LENGTH,
     Severity,
     errors,
     lint_contract,
@@ -39,6 +43,10 @@ def base_contract() -> EventContract:
             dedup=True,
             partition_by=PartitionConfig("RECEIVED_AT", "timestamp", "day"),
             cluster_by=["USER_ID"],
+            freshness=FreshnessConfig(
+                warn_after=FreshnessThreshold(12, "hour"),
+                error_after=FreshnessThreshold(24, "hour"),
+            ),
         ),
         staging=StagingConfig(
             dataset="staging",
@@ -51,21 +59,21 @@ def base_contract() -> EventContract:
                     "EVENT_ID",
                     "event_id",
                     "STRING",
-                    "Unique event ID.",
+                    "Unique identifier for this event, stable across replays.",
                     [ColumnTest("not_null"), ColumnTest("unique")],
                 ),
                 StagingColumn(
                     "USER_ID",
                     "user_id",
                     "STRING",
-                    "User.",
+                    "Account that signed up, joined to the users dimension.",
                     [ColumnTest("not_null")],
                 ),
                 StagingColumn(
                     "RECEIVED_AT",
                     "received_at",
                     "TIMESTAMP",
-                    "Load time.",
+                    "When the ingestion pipeline received this event, in UTC.",
                     [ColumnTest("not_null")],
                 ),
             ],
@@ -550,3 +558,218 @@ def test_invalid_bq_types_rejected(bq_type):
         c.staging.columns[0].type = bq_type
 
     assert "invalid-column-type" in error_codes(contract_with(mutate))
+
+
+def undocumented() -> EventContract:
+    """Base contract with one column stripped of its description."""
+    c = base_contract()
+    c.staging.columns[1].description = ""
+    return c
+
+
+def bad_strategy() -> EventContract:
+    """Base contract with a contract-scoped error to exempt."""
+    c = base_contract()
+    c.raw.incremental_strategy = "mrege"
+    return c
+
+
+class TestExemptions:
+    """An exemption suppresses exactly one rule at exactly one scope."""
+
+    def test_column_exemption_suppresses_its_warning(self):
+        c = undocumented()
+        c.staging.columns[1].exemptions = [
+            Exemption("missing-column-description", "deprecated column")
+        ]
+        assert "missing-column-description" not in warning_codes(c)
+
+    def test_contract_exemption_suppresses_its_error(self):
+        c = bad_strategy()
+        c.exemptions = [
+            Exemption("invalid-raw-strategy", "pinned by upstream")
+        ]
+        assert "invalid-raw-strategy" not in error_codes(c)
+
+    def test_exempted_finding_still_reported_with_its_reason(self):
+        c = undocumented()
+        c.staging.columns[1].exemptions = [
+            Exemption("missing-column-description", "deprecated column")
+        ]
+        finding = next(
+            f
+            for f in lint_contract(c)
+            if f.code == "missing-column-description"
+        )
+        assert finding.exempted
+        assert finding.exempt_reason == "deprecated column"
+
+    def test_contract_exemption_does_not_reach_a_column_finding(self):
+        c = undocumented()
+        c.exemptions = [Exemption("missing-column-description", "nice try")]
+        assert "missing-column-description" in warning_codes(c)
+
+    def test_column_exemption_does_not_reach_a_contract_finding(self):
+        c = bad_strategy()
+        c.staging.columns[0].exemptions = [
+            Exemption("invalid-raw-strategy", "nice try")
+        ]
+        assert "invalid-raw-strategy" in error_codes(c)
+
+    def test_exemption_on_the_wrong_column_does_not_suppress(self):
+        c = undocumented()
+        c.staging.columns[0].exemptions = [
+            Exemption("missing-column-description", "wrong column")
+        ]
+        assert "missing-column-description" in warning_codes(c)
+
+    def test_unmatched_exemption_is_inert(self):
+        c = base_contract()
+        c.exemptions = [Exemption("no-such-rule", "nothing to suppress")]
+        assert errors(lint_contract(c)) == []
+        assert warnings(lint_contract(c)) == []
+
+    def test_empty_reason_is_an_error(self):
+        c = base_contract()
+        c.exemptions = [Exemption("invalid-raw-strategy", "   ")]
+        assert "invalid-exemption-reason" in error_codes(c)
+
+    def test_empty_reason_does_not_suppress(self):
+        c = bad_strategy()
+        c.exemptions = [Exemption("invalid-raw-strategy", "")]
+        assert "invalid-raw-strategy" in error_codes(c)
+
+    def test_column_scoped_empty_reason_is_an_error(self):
+        c = undocumented()
+        c.staging.columns[1].exemptions = [
+            Exemption("missing-column-description", "")
+        ]
+        assert "invalid-exemption-reason" in error_codes(c)
+
+    def test_exemption_cannot_exempt_itself(self):
+        c = base_contract()
+        c.exemptions = [
+            Exemption("some-rule", ""),
+            Exemption("invalid-exemption-reason", "very clever"),
+        ]
+        assert "invalid-exemption-reason" in error_codes(c)
+
+
+class TestDescriptionQuality:
+    """A description exists but says nothing useful."""
+
+    def test_short_description_warns(self):
+        c = base_contract()
+        c.staging.columns[1].description = "The user."
+        assert "low-quality-column-description" in warning_codes(c)
+
+    def test_description_restating_the_name_warns(self):
+        c = base_contract()
+        # Long enough to clear the floor, still says nothing.
+        c.staging.columns[1].name = "u" * _MIN_DESCRIPTION_LENGTH
+        c.staging.columns[1].description = c.staging.columns[1].name
+        assert "low-quality-column-description" in warning_codes(c)
+
+    def test_description_restating_the_source_warns(self):
+        c = base_contract()
+        c.staging.columns[1].source = "U" * _MIN_DESCRIPTION_LENGTH
+        c.staging.columns[1].description = "u" * _MIN_DESCRIPTION_LENGTH
+        assert "low-quality-column-description" in warning_codes(c)
+
+    def test_description_at_the_floor_passes(self):
+        c = base_contract()
+        c.staging.columns[1].description = "x" * _MIN_DESCRIPTION_LENGTH
+        assert "low-quality-column-description" not in warning_codes(c)
+
+    def test_missing_and_low_quality_never_both_fire(self):
+        c = base_contract()
+        c.staging.columns[1].description = ""
+        codes = warning_codes(c)
+        assert "missing-column-description" in codes
+        assert "low-quality-column-description" not in codes
+
+    def test_whitespace_padding_does_not_clear_the_floor(self):
+        c = base_contract()
+        c.staging.columns[1].description = "The user." + " " * 60
+        assert "low-quality-column-description" in warning_codes(c)
+
+    def test_exemptible_per_column(self):
+        c = base_contract()
+        c.staging.columns[1].description = "The user."
+        c.staging.columns[1].exemptions = [
+            Exemption("low-quality-column-description", "self-evident key")
+        ]
+        assert "low-quality-column-description" not in warning_codes(c)
+
+
+class TestFreshness:
+    def test_declared_freshness_produces_no_warning(self):
+        assert "missing-freshness" not in warning_codes(base_contract())
+
+    def test_absent_freshness_warns(self):
+        c = base_contract()
+        c.raw.freshness = None
+        assert "missing-freshness" in warning_codes(c)
+
+    def test_missing_freshness_names_the_exemption(self):
+        c = base_contract()
+        c.raw.freshness = None
+        finding = next(
+            f for f in lint_contract(c) if f.code == "missing-freshness"
+        )
+        assert "modelgenExempt" in finding.message or "exempt" in (
+            finding.message
+        )
+
+    def test_missing_freshness_is_contract_scoped(self):
+        c = base_contract()
+        c.raw.freshness = None
+        finding = next(
+            f for f in lint_contract(c) if f.code == "missing-freshness"
+        )
+        assert finding.column == ""
+
+    def test_bad_period_is_an_error(self):
+        c = base_contract()
+        c.raw.freshness = FreshnessConfig(
+            warn_after=FreshnessThreshold(12, "fortnight")
+        )
+        assert "invalid-freshness-period" in error_codes(c)
+
+    def test_bad_count_is_an_error(self):
+        c = base_contract()
+        c.raw.freshness = FreshnessConfig(
+            warn_after=FreshnessThreshold(0, "hour")
+        )
+        assert "invalid-freshness-count" in error_codes(c)
+
+    def test_non_integer_count_is_an_error(self):
+        c = base_contract()
+        c.raw.freshness = FreshnessConfig(
+            warn_after=FreshnessThreshold("twelve", "hour")
+        )
+        assert "invalid-freshness-count" in error_codes(c)
+
+    def test_period_and_count_fire_independently(self):
+        c = base_contract()
+        c.raw.freshness = FreshnessConfig(
+            warn_after=FreshnessThreshold(12, "fortnight")
+        )
+        codes = error_codes(c)
+        assert "invalid-freshness-period" in codes
+        assert "invalid-freshness-count" not in codes
+
+    def test_error_after_is_checked_too(self):
+        c = base_contract()
+        c.raw.freshness = FreshnessConfig(
+            error_after=FreshnessThreshold(-1, "hour")
+        )
+        assert "invalid-freshness-count" in error_codes(c)
+
+    def test_freshness_exemptible_at_contract_scope(self):
+        c = base_contract()
+        c.raw.freshness = None
+        c.exemptions = [
+            Exemption("missing-freshness", "static reference table")
+        ]
+        assert "missing-freshness" not in warning_codes(c)

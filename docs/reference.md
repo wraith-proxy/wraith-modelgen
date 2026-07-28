@@ -39,6 +39,7 @@ classDiagram
         modelgenLoadedAtField: string
         modelgenRaw: object
         modelgenStaging: object
+        modelgenExempt: list
     }
 
     DataContract "1" --> "1..*" Server : servers
@@ -96,12 +97,13 @@ classDiagram
 | `unique` | no | → `unique` test |
 | `quality` | no | `rule: validValues` + `validValues: [...]` → `accepted_values` test |
 | `classification` | no | `pii` or `psi` → the column is **encrypted** into staging and emitted as `BYTES`. See [Keystore & Erasure](bigquery/keystore.md) |
+| `customProperties` | no | `modelgenExempt`, lint exemptions scoped to this column only. See [Lint Rules](linting.md#exemptions) |
 
 Classification is ODCS's own field, and it drives encryption at generation
-time — the same seam that turns `required: true` into a `not_null` test with
-no human in the loop. The alternative is what most large estates have: a
-classification field in a catalogue that no pipeline reads and no gate
-enforces.
+time, the same seam that turns `required: true` into a `not_null` test with
+no human in the loop. Declaring it in the contract is what makes it take
+effect, rather than recording it in a catalogue that nothing downstream
+reads.
 
 modelgen does not use ODCS `encryptedName`. That field assumes a plaintext
 column with an encrypted sibling; here the column **is** the ciphertext,
@@ -114,8 +116,9 @@ reach.
 |---|---|---|
 | `modelgenLoadedAtField` | string | Source timestamp column for incremental filtering |
 | `modelgenSubjectField` | string | Source column identifying the data subject. Required once any property is classified. Encrypted deterministically, and the keystore lookup for every other classified column on the row |
-| `modelgenRaw` | object | Raw layer config: `dataset`, `incrementalStrategy`, `dedup`, `partitionBy {field, dataType, granularity}`, `clusterBy` |
-| `modelgenStaging` | object | Staging layer config: `dataset`, `materialization`, `clusterBy`, plus `generate: false` for a raw-only contract. `dedup` is rejected — it is a raw-layer concern |
+| `modelgenRaw` | object | Raw layer config: `dataset`, `incrementalStrategy`, `dedup`, `partitionBy {field, dataType, granularity}`, `clusterBy`, `freshness {warnAfter, errorAfter}` |
+| `modelgenStaging` | object | Staging layer config: `dataset`, `materialization`, `clusterBy`, plus `generate: false` for a raw-only contract. `dedup` is rejected, because it is a raw-layer concern |
+| `modelgenExempt` | list | Lint exemptions, each `{rule, reason}`. Contract-scoped here; a property's own `customProperties` scopes to that column. `reason` is mandatory. See [Lint Rules](linting.md#exemptions) |
 
 `modelgenStaging.materialization` defaults to `snapshot`: a datestamped
 daily snapshot, one full copy of the dimension per `ds` partition. It
@@ -123,6 +126,12 @@ derives `incrementalStrategy: insert_overwrite` and `partitionBy` on `ds`,
 so a snapshot contract states neither. `materialization: incremental`
 restores the high-water-mark load, and then `incrementalStrategy` and
 `partitionBy` are yours to declare.
+
+`modelgenRaw.freshness` takes `warnAfter` and `errorAfter`, each
+`{count: <positive int>, period: minute|hour|day}`. Both are optional
+individually, and whatever is given is emitted as the dbt `freshness:` block on
+the generated source, ready for `dbt source freshness`. Omitting the block
+raises the `missing-freshness` warning. See [Lint Rules](linting.md#source-freshness).
 
 ---
 
@@ -174,7 +183,7 @@ from deduplicated
 where _modelgen_rn = 1
 ```
 
-Raw uses source-side column names throughout. Columns are listed explicitly — introspected from BigQuery (or the contract in `--from-contract` mode) at generation time. Regenerate when the source schema changes.
+Raw uses source-side column names throughout. Columns are listed explicitly, introspected from BigQuery (or from the contract in `--from-contract` mode) at generation time. Regenerate when the source schema changes.
 
 ### `raw__<name>.yml`
 
@@ -182,7 +191,7 @@ dbt `sources` entry (all introspected columns) + model definition.
 
 ### `stg__<name>.sql`
 
-Default — `materialization: snapshot`. One full copy of the dimension per
+Default, `materialization: snapshot`. One full copy of the dimension per
 `ds` partition, no high-water mark to filter on:
 
 ```sql
@@ -214,7 +223,7 @@ No `unique_key`: `insert_overwrite` replaces whole partitions and never
 reads it. The `ds` stamp defaults to dbt's run date, so a backfill is the
 same SQL with `--vars '{ds: YYYY-MM-DD}'`.
 
-With `materialization: incremental` — the high-water-mark load, keyed on
+With `materialization: incremental`, the high-water-mark load, keyed on
 the contract's own `incrementalStrategy` and `partitionBy`:
 
 ```sql
@@ -246,7 +255,7 @@ from source
 
 Staging uses staging-side names. Raw names never leak downstream.
 
-With classified properties — the keystore is joined and every classified
+With classified properties, the keystore is joined and every classified
 column is encrypted on the way in:
 
 ```sql
@@ -288,7 +297,7 @@ The subject column gets `DETERMINISTIC_ENCRYPT` so its ciphertext is stable
 per keyset and joins survive a crypto-shred; everything else gets randomised
 `AEAD.ENCRYPT`. AAD is bound to the subject, so ciphertext cannot be lifted
 into another row. The join is a **`left join`** deliberately: a subject with
-no keyset must not silently vanish from staging — the row survives with NULL
+no keyset must not silently vanish from staging. The row survives with NULL
 ciphertext, which the `not_null` test turns into a visible failure.
 
 `{{ source('keystore', 'subject_keys') }}` is a convention, not a contract
@@ -298,12 +307,12 @@ key: one keystore per warehouse, declared as a dbt source. See
 ### `stg__<name>.yml`
 
 dbt model definition with declared columns and their tests. In snapshot mode
-it also declares `ds`, and scopes any `unique` test to one partition — the
+it also declares `ds`, and scopes any `unique` test to one partition, since the
 grain is (key, `ds`), so an unscoped test would fail once a second snapshot
 lands.
 
-A classified column is declared as `data_type: BYTES` — whatever its
-plaintext type — and carries its classification in `meta` so a downstream
+A classified column is declared as `data_type: BYTES`, whatever its
+plaintext type, and carries its classification in `meta` so a downstream
 policy-tag applier can find it:
 
 ```yaml
@@ -319,7 +328,7 @@ policy-tag applier can find it:
 
 modelgen does not emit BigQuery **policy tags**. They need a taxonomy
 resource name that cannot be derived from a contract, and column-level
-access control belongs with the rest of IAM — which Terraform owns. The
+access control belongs with the rest of IAM, which Terraform owns. The
 `meta` block is the machine-readable hook to apply them from.
 
 ---

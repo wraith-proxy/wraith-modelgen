@@ -12,7 +12,7 @@
   in parallel with `dbt run --vars '{ds: YYYY-MM-DD}'`.
 
   Classified columns are encrypted here and never materialised in
-  plaintext downstream. Decrypt in a view or at query time only — a table
+  plaintext downstream. Decrypt in a view or at query time only. A table
   holding decrypted values is a second copy the crypto-shred cannot reach.
   Subject column: deterministic, so joins survive the shred. Everything
   else: randomised. Erasure is one DELETE from the keystore.

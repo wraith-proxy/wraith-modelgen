@@ -14,7 +14,7 @@ key rather than the data.
 
 ## The key hierarchy
 
-Three keys, three jobs. Conflating them is the usual mistake — CMEK is not
+Three keys, three jobs. Conflating them is the usual mistake. CMEK is not
 an erasure mechanism, and most estates that "have CMEK" have no answer to
 Article 17 at all.
 
@@ -63,7 +63,7 @@ Both are wrapped by the same KEK and destroyed by the same delete, so the
 erasure story is unaffected: still one row, still one delete.
 
 Deterministic encryption under a shared key would be vulnerable to
-frequency analysis on a low-cardinality column — encrypt a boolean and you
+frequency analysis on a low-cardinality column. Encrypt a boolean and you
 have published a boolean. Under **per-subject** keysets the concern is
 immaterial: two subjects with the same plaintext produce different
 ciphertext. It survives as a lint rule rather than an argument.
@@ -79,12 +79,12 @@ Be honest about the timeline, because "irrecoverable" is not instantaneous:
 |---|---|---|
 | Time travel | 48h (BigQuery minimum; 168h default) | Anyone with query access, via `FOR SYSTEM_TIME AS OF` |
 | Fail-safe | 7 days after time travel | Google Cloud support only |
-| After that | — | Nobody |
+| After that | none | Nobody |
 
 Worst case with a 48-hour window: roughly **nine days** to genuine
 unrecoverability. UK GDPR allows one calendar month from receipt, extendable
 by two further months for complex or numerous requests, so nine days closes
-comfortably inside the deadline — but it has to be a deliberate setting, not
+comfortably inside the deadline, but it has to be a deliberate setting, not
 an accident of the default.
 
 Time travel is a **dataset** property, which is why the keystore gets a
@@ -110,7 +110,7 @@ table.
 
 This is a correctness constraint, not a performance preference. A table
 holding decrypted PII is a second copy the shred never reaches. Erasure then
-fails **silently**, with nothing anywhere to surface the failure — no error,
+fails **silently**, with nothing anywhere to surface the failure: no error,
 no failed test, no row count that looks wrong. You find out from the
 regulator.
 
@@ -125,7 +125,7 @@ view      ← decryption, for a reader with both BQ and KMS permission
 ```
 
 !!! warning "Raw is outside the shred"
-    `raw` holds classified values in plaintext by design — it is the record
+    `raw` holds classified values in plaintext by design, since it is the record
     of what the source actually sent. The crypto-shred does not reach it.
     Erasure in `raw` is **retention**, not rewriting: give the raw dataset a
     partition expiry short enough that plaintext ages out inside your
@@ -134,7 +134,7 @@ view      ← decryption, for a reader with both BQ and KMS permission
 
 An authorised reader needs two grants, not one: BigQuery access to the
 table, and `cloudkms.cryptoKeyVersions.useToDecrypt` on the KEK. Splitting
-those across roles is the point — a warehouse admin with full BigQuery
+those across roles is the point. A warehouse admin with full BigQuery
 access still reads nothing but ciphertext.
 
 ## What modelgen generates
@@ -173,12 +173,12 @@ classified. See [Lint Rules](../linting.md).
 
 | Procedure | What it does |
 |---|---|
-| `keystore.issue_keyset` | Mints both DEKs for a subject, already wrapped. Idempotent — safe on every ingest |
+| `keystore.issue_keyset` | Mints both DEKs for a subject, already wrapped. Idempotent, safe on every ingest |
 | `keystore.shred_subject` | The one delete. Idempotent; a second call reports 0 and changes nothing |
 | `keystore.verify_shred` | Asserts the keyset is gone. `breach = TRUE` means the shred did not take |
 
 `KEYS.NEW_WRAPPED_KEYSET` mints the keyset already wrapped, so the plaintext
-DEK never exists outside BigQuery's execution — there is no step where an
+DEK never exists outside BigQuery's execution. There is no step where an
 operator handles raw key material.
 
 Encrypt and decrypt query templates live at the bottom of
@@ -196,7 +196,7 @@ This is the part worth understanding before anyone signs off on it.
 | Attributing any row to that individual | Impossible |
 | A decrypting view | Their rows drop out; the join finds no keyset |
 
-A historical FinRep or RegRep submission still reconstructs; subject-level
+A historical regulatory submission still reconstructs; subject-level
 attestation does not. That is precisely the line Article 17 draws.
 
 ## Standing caveats
@@ -217,22 +217,17 @@ attestation does not. That is precisely the line Article 17 draws.
 
 | Reference | What it supports |
 |---|---|
-| NIST SP 800-88 Rev. 1, *Guidelines for Media Sanitization* | Defines **Cryptographic Erase (CE)** as a Purge-level sanitization technique — the formal name for what this design does |
+| NIST SP 800-88 Rev. 1, *Guidelines for Media Sanitization* | Defines **Cryptographic Erase (CE)** as a Purge-level sanitization technique, the formal name for what this design does |
 | NIST SP 800-57 Part 1 Rev. 5, *Recommendation for Key Management* | KEK / DEK terminology and the key-hierarchy model |
 | UK GDPR Article 17 | Right to erasure |
 | UK GDPR Article 12(3) | One calendar month to respond, extendable by two further months for complex or numerous requests |
-| UK GDPR Article 5(2) | Accountability — why a record of the erasure request is kept even after the subject is erased |
+| UK GDPR Article 5(2) | Accountability, why a record of the erasure request is kept even after the subject is erased |
 | BigQuery [AEAD encryption functions](https://cloud.google.com/bigquery/docs/reference/standard-sql/aead_encryption_functions) | `AEAD.ENCRYPT`, `DETERMINISTIC_ENCRYPT`, `KEYS.NEW_WRAPPED_KEYSET`, `KEYS.KEYSET_CHAIN` |
 | BigQuery [CMEK](https://cloud.google.com/bigquery/docs/customer-managed-encryption) | Dataset-level at-rest encryption, and why it is not the erasure mechanism |
 | BigQuery [time travel and fail-safe](https://cloud.google.com/bigquery/docs/time-travel) | The 48h–168h window, and the 7-day fail-safe period after it |
 
-!!! warning "Do not quote 40 days"
-    The 40-day limit is DPA 1998 s.7 subject access, long superseded. Under
-    UK GDPR it is one calendar month from receipt. Getting this wrong in
-    front of a regulator is not a good look.
-
 ## Related
 
-- [Tooling Decisions](decisions.md) — the decision record and its reasoning
-- [SCD Type 2](scd2.md) — `ds` snapshots, and why the keystore is exempt
-- [Architecture](architecture.md) — layer responsibilities
+- [Tooling Decisions](decisions.md): the decision record and its reasoning
+- [SCD Type 2](scd2.md): `ds` snapshots, and why the keystore is exempt
+- [Architecture](architecture.md): layer responsibilities

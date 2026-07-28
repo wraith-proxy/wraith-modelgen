@@ -8,22 +8,25 @@ sources:
       - name: user_signups_raw
         description: "Landed user_signed_up events. Source schema as observed at gen time."
         loaded_at_field: RECEIVED_AT
+        freshness:
+          warn_after: {count: 12, period: hour}
+          error_after: {count: 24, period: hour}
         columns:
           - name: EVENT_ID
             data_type: STRING
-            description: "Unique identifier for this event."
+            description: "Idempotency key for this signup event. Unique per emission, stable across replays, and the join key downstream."
           - name: USER_ID
             data_type: STRING
-            description: "The ID of the user who signed up."
+            description: "Account that completed signup. Encrypted deterministically, so joins and distinct counts still work on the ciphertext."
           - name: SIGNUP_METHOD
             data_type: STRING
-            description: "How the user signed up."
+            description: "Which signup route the user came through. Constrained to the validValues below; a new route needs a contract change."
           - name: RECEIVED_AT
             data_type: TIMESTAMP
-            description: "When the event was received by the ingestion pipeline."
+            description: "When the ingestion pipeline received the event, not when the user acted. Drives the incremental high-water mark."
           - name: COUNTRY_CODE
             data_type: STRING
-            description: "ISO 3166-1 alpha-2 country code."
+            description: "ISO 3166-1 alpha-2 country the signup came from, resolved at ingestion. Null when the IP lookup found nothing."
 
 models:
   - name: raw__user_signed_up
@@ -36,16 +39,16 @@ models:
     columns:
       - name: EVENT_ID
         data_type: STRING
-        description: "Unique identifier for this event."
+        description: "Idempotency key for this signup event. Unique per emission, stable across replays, and the join key downstream."
       - name: USER_ID
         data_type: STRING
-        description: "The ID of the user who signed up."
+        description: "Account that completed signup. Encrypted deterministically, so joins and distinct counts still work on the ciphertext."
       - name: SIGNUP_METHOD
         data_type: STRING
-        description: "How the user signed up."
+        description: "Which signup route the user came through. Constrained to the validValues below; a new route needs a contract change."
       - name: RECEIVED_AT
         data_type: TIMESTAMP
-        description: "When the event was received by the ingestion pipeline."
+        description: "When the ingestion pipeline received the event, not when the user acted. Drives the incremental high-water mark."
       - name: COUNTRY_CODE
         data_type: STRING
-        description: "ISO 3166-1 alpha-2 country code."
+        description: "ISO 3166-1 alpha-2 country the signup came from, resolved at ingestion. Null when the IP lookup found nothing."
