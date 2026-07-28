@@ -17,9 +17,29 @@ Given a YAML data contract describing a BigQuery source table, `wraith-modelgen`
 
 Source schema changes are handled at the raw/staging boundary, not in your downstream models.
 
-Staging defaults to a **datestamped daily snapshot**: `insert_overwrite` partitioned on a generated `ds` column, one full copy of the dimension per day. History is `where ds = '<date>'`, and any date backfills in parallel with the same SQL (`dbt run --vars '{ds: 2026-07-27}'`). Set `materialization: incremental` on `modelgenStaging` to opt back into a high-water-mark load.
+Staging defaults to a **datestamped daily snapshot**: `insert_overwrite` partitioned on a generated `ds` column, one full copy of the dimension per day. Each run replaces that day's partition rather than the whole table, so the load is incremental even though each partition holds a complete daily copy. History is `where ds = '<date>'`, and any date backfills in parallel with the same SQL (`dbt run --vars '{ds: 2026-07-27}'`). Set `materialization: incremental` on `modelgenStaging` to opt back into a high-water-mark load.
+
+Both layers load incrementally. No generated model emits `CREATE OR REPLACE TABLE ... AS SELECT`, and full rebuild is a documented exception rather than a default. See [Tooling Decisions](bigquery/decisions.md).
 
 A property marked `classification: pii` or `psi` is **encrypted into staging** and never materialised in plaintext. The subject column is encrypted deterministically so joins survive erasure; right to be forgotten is a single DELETE from the keystore. See [Keystore & Erasure](bigquery/keystore.md).
+
+## Contract standards
+
+`modelgen validate --strict` is the CI gate. Alongside the structural checks it
+holds contracts to a few standards that start to matter once more than one team
+reads them:
+
+| Standard | Rule |
+|---|---|
+| Every column is documented | `description` of at least 50 characters that says something the column name does not |
+| Every source declares staleness | `modelgenRaw.freshness` with `warnAfter` / `errorAfter`, which becomes the dbt `freshness:` block |
+| Every key is tested | `primaryKey` properties carry `required` and `unique` |
+| Exceptions are written down | `modelgenExempt` opts out of one rule, and a `reason` is mandatory |
+
+An exemption is scoped either to the whole contract or to a single column, and
+the two never cross. Exempted findings still print on every `validate` run,
+labelled `exempt` with their reason, and the summary counts them. They stop
+blocking, they do not stop being visible. See [Lint Rules](linting.md).
 
 ## Install
 
@@ -33,7 +53,7 @@ uv tool install wraith-modelgen
 # Initialise the project layout (once)
 modelgen init
 
-# Draft a contract from a live table — every column declared,
+# Draft a contract from a live table: every column declared,
 # keys guessed and marked TODO
 modelgen new my-project.landing.user_signups
 
@@ -69,7 +89,7 @@ Or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key file.
 All but `new` also run without credentials: pass `--from-contract` to
 generate from the contract's declared columns alone, which is what CI does.
 Without the flag they fall back to it automatically when no credentials are
-found. `new` always needs BigQuery — it has nothing to work from but the
+found. `new` always needs BigQuery, since it has nothing to work from but the
 live table.
 
 ---

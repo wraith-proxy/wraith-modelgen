@@ -7,20 +7,21 @@ broken SQL in dbt hours later: a typo'd incremental strategy, a cast to a
 type BigQuery has never heard of, a staging unique_key pointing at a column
 the staging model doesn't select.
 
-All findings are collected in one pass — fix everything at once rather
-than playing whack-a-mole one error per run.
+All findings are collected in one pass, so everything can be fixed at
+once rather than playing whack-a-mole one error per run.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 from modelgen.contract import (
     SNAPSHOT_PARTITION_FIELD,
     SNAPSHOT_STRATEGY,
     EventContract,
+    StagingColumn,
     StagingConfig,
 )
 
@@ -33,6 +34,12 @@ _MATERIALIZATIONS = {"snapshot", "incremental"}
 _CLASSIFICATIONS = {"pii", "psi"}
 _PARTITION_DATA_TYPES = {"timestamp", "date", "datetime", "int64"}
 _PARTITION_GRANULARITIES = {"hour", "day", "month", "year"}
+# dbt's source-freshness vocabulary.
+_FRESHNESS_PERIODS = {"minute", "hour", "day"}
+
+# A description shorter than this is a placeholder, not documentation. The
+# floor is calibrated for readers who did not write the model.
+_MIN_DESCRIPTION_LENGTH = 50
 
 # Standard types plus the aliases BigQuery accepts (INT/DECIMAL family).
 _BQ_TYPES = {
@@ -73,10 +80,16 @@ class Finding:
     severity: Severity
     code: str
     message: str
+    column: str = ""  # staging column name; "" means contract-scoped
+    exempt_reason: str = ""
 
     @property
     def is_error(self) -> bool:
         return self.severity is Severity.ERROR
+
+    @property
+    def exempted(self) -> bool:
+        return bool(self.exempt_reason)
 
 
 def _valid_bq_type(raw: str) -> bool:
@@ -100,7 +113,7 @@ def lint_contract(contract: EventContract) -> list[Finding]:
         err(
             "invalid-event-name",
             f"event.name {contract.name!r} must match"
-            " ^[a-z][a-z0-9_]*$ — it becomes a dbt model name"
+            " ^[a-z][a-z0-9_]*$, because it becomes a dbt model name"
             " and a filename.",
         )
 
@@ -144,15 +157,69 @@ def lint_contract(contract: EventContract) -> list[Finding]:
     findings.extend(_lint_staging_materialization(contract))
     findings.extend(_lint_staging_columns(contract))
     findings.extend(_lint_classification(contract))
+    findings.extend(_lint_freshness(contract))
+
+    findings = _apply_exemptions(contract, findings)
+    # After the sweep, so an exemption can never exempt itself.
+    findings.extend(_lint_exemptions(contract))
 
     return findings
 
 
 def _appender(findings: list[Finding], severity: Severity):
-    def add(code: str, message: str) -> None:
-        findings.append(Finding(severity, code, message))
+    def add(code: str, message: str, column: str = "") -> None:
+        findings.append(Finding(severity, code, message, column))
 
     return add
+
+
+def _apply_exemptions(
+    contract: EventContract, findings: list[Finding]
+) -> list[Finding]:
+    """Attach the justification to every finding an exemption covers.
+
+    Matching is on (column, rule). A contract-scoped exemption keys on the
+    empty column, so it can never reach into a column-scoped finding of the
+    same code, or the reverse.
+    """
+    # ponytail: no registry of valid rule codes. A typo'd rule is inert and
+    # its warning keeps firing, so the mistake is already visible. Add one if
+    # typos become a recurring cost.
+    reasons: dict[tuple[str, str], str] = {
+        ("", e.rule): e.reason for e in contract.exemptions if e.reason.strip()
+    }
+    for col in contract.staging.columns:
+        for e in col.exemptions:
+            if e.reason.strip():
+                reasons[(col.name, e.rule)] = e.reason
+
+    return [
+        replace(f, exempt_reason=reasons[(f.column, f.code)])
+        if (f.column, f.code) in reasons
+        else f
+        for f in findings
+    ]
+
+
+def _lint_exemptions(contract: EventContract) -> list[Finding]:
+    findings: list[Finding] = []
+    err = _appender(findings, Severity.ERROR)
+
+    scopes: list[tuple[str, list]] = [("", contract.exemptions)]
+    scopes += [(c.name, c.exemptions) for c in contract.staging.columns]
+
+    for column, exemptions in scopes:
+        for e in exemptions:
+            if not e.reason.strip():
+                err(
+                    "invalid-exemption-reason",
+                    f"modelgenExempt entry for rule {e.rule!r} declares no"
+                    " reason. Say why the rule does not apply here, so the"
+                    " next person to read it does not have to guess.",
+                    column=column,
+                )
+
+    return findings
 
 
 def _lint_layer_config(layer: str, contract: EventContract) -> list[Finding]:
@@ -258,6 +325,19 @@ def _lint_staging_materialization(
     return findings
 
 
+def _weak_description(col: StagingColumn) -> str:
+    """Why a non-empty description reads as a placeholder, "" if it's fine."""
+    text = col.description.strip()
+    if text.lower() in {col.name.lower(), col.source.lower()}:
+        return "it only restates the column name"
+    if len(text) < _MIN_DESCRIPTION_LENGTH:
+        return (
+            f"it is {len(text)} characters, under the"
+            f" {_MIN_DESCRIPTION_LENGTH}-character floor"
+        )
+    return ""
+
+
 def _lint_staging_columns(contract: EventContract) -> list[Finding]:
     staging: StagingConfig = contract.staging
     findings: list[Finding] = []
@@ -275,18 +355,21 @@ def _lint_staging_columns(contract: EventContract) -> list[Finding]:
                     f"invalid-column-{label}",
                     f"staging column {label} {value!r} is not a valid"
                     " identifier.",
+                    column=col.name,
                 )
         if col.source in seen_sources:
             err(
                 "duplicate-column-source",
                 f"staging declares source column {col.source!r} more"
                 " than once.",
+                column=col.name,
             )
         seen_sources.add(col.source)
         if col.name in seen_names:
             err(
                 "duplicate-column-name",
                 f"staging declares output column {col.name!r} more than once.",
+                column=col.name,
             )
         seen_names.add(col.name)
 
@@ -295,12 +378,24 @@ def _lint_staging_columns(contract: EventContract) -> list[Finding]:
                 "invalid-column-type",
                 f"staging column {col.name!r} casts to {col.type!r},"
                 " which is not a BigQuery type.",
+                column=col.name,
             )
         if not col.description:
             warn(
                 "missing-column-description",
                 f"staging column {col.name!r} has no description."
                 " Downstream consumers read these.",
+                column=col.name,
+            )
+        elif weakness := _weak_description(col):
+            warn(
+                "low-quality-column-description",
+                f"staging column {col.name!r} has a description, but"
+                f" {weakness}. Say what the value means and when it is"
+                " null, not what the name already says. If the column"
+                " genuinely needs no more, exempt"
+                " low-quality-column-description with a reason.",
+                column=col.name,
             )
 
     # The staging model only selects declared columns. If unique_key or
@@ -350,6 +445,49 @@ def _lint_staging_columns(contract: EventContract) -> list[Finding]:
                 f"staging column {col.name!r} backs the unique_key"
                 " but declares no tests. Consider [not_null,"
                 " unique].",
+                column=col.name,
+            )
+
+    return findings
+
+
+def _lint_freshness(contract: EventContract) -> list[Finding]:
+    """A source nobody checks for staleness fails silently."""
+    findings: list[Finding] = []
+    err = _appender(findings, Severity.ERROR)
+    warn = _appender(findings, Severity.WARNING)
+
+    freshness = contract.raw.freshness
+    if freshness is None:
+        warn(
+            "missing-freshness",
+            "modelgenRaw declares no freshness block, so"
+            " `dbt source freshness` has nothing to check and a stalled"
+            " pipeline stays quiet until someone notices the numbers are"
+            " wrong. Add warnAfter/errorAfter, or exempt"
+            " missing-freshness with a reason (a static reference table"
+            " refreshed by hand is the usual one).",
+        )
+        return findings
+
+    for label, threshold in [
+        ("warnAfter", freshness.warn_after),
+        ("errorAfter", freshness.error_after),
+    ]:
+        if threshold is None:
+            continue
+        if threshold.period.lower() not in _FRESHNESS_PERIODS:
+            err(
+                "invalid-freshness-period",
+                f"freshness.{label}.period {threshold.period!r} is not a"
+                f" dbt freshness period. Use one of"
+                f" {sorted(_FRESHNESS_PERIODS)}.",
+            )
+        if not isinstance(threshold.count, int) or threshold.count <= 0:
+            err(
+                "invalid-freshness-count",
+                f"freshness.{label}.count {threshold.count!r} must be a"
+                " positive integer.",
             )
 
     return findings
@@ -373,6 +511,7 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
                 f"property {col.name!r} declares classification"
                 f" {col.classification!r}; modelgen understands"
                 f" {sorted(_CLASSIFICATIONS)}.",
+                column=col.name,
             )
         # Encryption returns BYTES, so accepted_values could never match.
         # An enumerated column is also a category rather than a personal
@@ -386,6 +525,7 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
                 " An enumerated column is a category, not a personal"
                 " value: its ciphertext falls to frequency analysis and"
                 " the accepted_values test cannot match BYTES.",
+                column=col.name,
             )
 
     # Encryption emits BYTES, and BigQuery clusters on none of it and
@@ -400,6 +540,7 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
                 " BYTES. Cluster on an unclassified column, or wrap the"
                 " ciphertext in to_hex() yourself if the lookup path"
                 " truly needs it.",
+                column=col,
             )
     if (
         staging.partition_by is not None
@@ -410,6 +551,7 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
             f"partitionBy.field {staging.partition_by.field!r} is"
             " classified and therefore emitted as BYTES. BigQuery"
             " partitions on date, timestamp, datetime or int64 only.",
+            column=staging.partition_by.field,
         )
 
     if not contract.encrypts:
@@ -442,8 +584,9 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
             "subject-field-unclassified",
             f"modelgenSubjectField {contract.subject_field!r} identifies"
             " the data subject but carries no classification, so it"
-            " would be materialised in plaintext — the one column that"
-            " must not be.",
+            " would be materialised in plaintext, and it is the one"
+            " column that must not be.",
+            column=subject.name,
         )
 
     # The incremental filter reads `where <upstream> > (select max(<this>))`.
@@ -464,8 +607,9 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
                 f"modelgenLoadedAtField {contract.loaded_at_field!r} is"
                 " classified, so the incremental filter would compare a"
                 " timestamp against ciphertext. A load timestamp is"
-                " pipeline metadata — drop the classification, or"
+                " pipeline metadata. Drop the classification, or"
                 " switch to materialization: snapshot.",
+                column=loaded_at.name,
             )
 
     if not any(t.name == "not_null" for t in subject.tests):
@@ -474,14 +618,15 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
             f"subject column {subject.name!r} has no not_null test. A"
             " row whose subject has no keyset encrypts to NULL, and"
             " nothing would surface it. Set required: true.",
+            column=subject.name,
         )
 
     return findings
 
 
 def errors(findings: list[Finding]) -> list[Finding]:
-    return [f for f in findings if f.is_error]
+    return [f for f in findings if f.is_error and not f.exempted]
 
 
 def warnings(findings: list[Finding]) -> list[Finding]:
-    return [f for f in findings if not f.is_error]
+    return [f for f in findings if not f.is_error and not f.exempted]

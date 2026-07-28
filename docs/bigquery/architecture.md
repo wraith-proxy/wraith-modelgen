@@ -11,7 +11,7 @@ project.staging      ← typed, parsed, ds snapshots built here
     ↓  dbt
 project.marts        ← dimensions, facts, presentation aggregates
     ↓
-Dashboards / analysts / RegRep / FinRep
+Dashboards / analysts / regulatory reporting
 ```
 
 ## Responsibility Split
@@ -21,13 +21,11 @@ Dashboards / analysts / RegRep / FinRep
 | GCP project | Terraform | Billing, IAM, APIs enabled |
 | Datasets (schemas) | Terraform | Container, location (immutable), access controls |
 | Tables | dbt / BQ stored procedures | Schema, data, partitioning, clustering |
-| Schema migrations | dbt `--full-refresh` | Handled by rebuild, not DDL migrations |
+| Schema migrations | dbt `--full-refresh` | A one-time full refresh applies a schema change to an otherwise incremental model. It is not the routine load strategy (see [Incremental over full rebuild](decisions.md#incremental-over-full-rebuild)) |
 
 **Terraform owns datasets because dataset location is immutable after creation.** Set wrong once, you're dropping everything. Terraform enforces it as code.
 
-**dbt owns tables** — including `CREATE OR REPLACE TABLE`. Not Terraform. TF managing individual model tables creates state drift on every model change.
-
-**No Liquibase.** Liquibase solves surgical incremental DDL migration for OLTP (where you can't drop and rebuild). BQ warehouse pattern rebuilds from source. The problem Liquibase solves doesn't exist here.
+**dbt owns tables**, including `CREATE OR REPLACE TABLE`. Terraform managing individual model tables creates state drift on every model change.
 
 ## OLTP vs OLAP
 
@@ -38,7 +36,7 @@ BQ is OLAP. Not suitable as an OLTP system.
 | Workload | Thousands of single-row writes/sec | Batch analytical reads |
 | Latency requirement | Milliseconds | Seconds acceptable |
 | DML | High frequency, row-targeted | Occasional, partition-scoped |
-| Primary use | Serve live customer operations | Reporting, metrics, FinRep, RegRep |
+| Primary use | Serve live customer operations | Reporting, metrics, regulatory submissions |
 
 **What lives in OLTP at a bank:**
 - Core banking ledger (balance debits/credits, real-time)
@@ -50,21 +48,21 @@ BQ is OLAP. Not suitable as an OLTP system.
 **What lives in BQ (OLAP):**
 - All of the above, after the fact, extracted and landed as append-only logs
 - Analytical dimensions and facts built on top
-- FinRep / RegRep regulatory submissions
+- Regulatory submissions
 - Risk and credit models consuming historical data
-- Formerly in SAS/Teradata/Oracle — migrating to BQ/GCP
+- Formerly in SAS/Teradata/Oracle, migrating to BQ/GCP
 
 **Snapshot and SCD2 rebuilds are OLAP, not OLTP.** Staging replaces one `ds` partition per daily batch; the SCD2 carve-out rebuilds from that base on the same cadence. Neither runs thousands of times per second. BQ handles it. See [SCD Type 2](scd2.md).
 
 ## Dataset Naming Convention
 
 ```
-{project}.raw       — source system logs, append-only, no transformation
-{project}.staging   — typed, parsed, datestamped daily snapshots (ds)
-{project}.marts     — dimensions, facts, presentation aggregates
-{project}.utils     — shared stored procedures (project.utils.procedure_name)
-{project}.snapshots — schema baseline snapshots for drift detection
-{project}.keystore  — per-subject wrapped DEKs. Its own dataset so time
+{project}.raw       : source system logs, append-only, no transformation
+{project}.staging   : typed, parsed, datestamped daily snapshots (ds)
+{project}.marts     : dimensions, facts, presentation aggregates
+{project}.utils     : shared stored procedures (project.utils.procedure_name)
+{project}.snapshots : schema baseline snapshots for drift detection
+{project}.keystore  : per-subject wrapped DEKs. Its own dataset so time
                       travel can be set short, and IAM'd separately
 ```
 
@@ -74,7 +72,7 @@ time travel is a dataset property and erasure depends on it being short. See
 
 ## Partition and Cluster Strategy
 
-**Partition** on the date the layer is keyed by: `ds` for staging snapshots, the event timestamp for raw, `valid_from` for a derived SCD2 dimension. BQ uses partitions for date-range pruning — critical for cost on daily loads.
+**Partition** on the date the layer is keyed by: `ds` for staging snapshots, the event timestamp for raw, `valid_from` for a derived SCD2 dimension. BQ prunes by partition on a date range, which is what keeps daily loads affordable.
 
 **Cluster** on the most common filter/join columns (entity key, status, type). BQ uses clustering for block-level pruning within partitions.
 

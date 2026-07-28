@@ -15,6 +15,8 @@ from modelgen.contract import ContractError, EventContract
 from modelgen.generator import GenerationError, Layer, generate
 from modelgen.introspect import IntrospectionError
 from modelgen.lint import Finding, lint_contract
+from modelgen.lint import errors as lint_errors
+from modelgen.lint import warnings as lint_warnings
 
 app = typer.Typer(
     name="modelgen",
@@ -54,15 +56,25 @@ def _main(
 
 def _print_findings(findings: list[Finding]) -> None:
     for f in findings:
-        colour = "red" if f.is_error else "yellow"
-        label = "error  " if f.is_error else "warning"
+        if f.exempted:
+            colour, label = "cyan", "exempt "
+        elif f.is_error:
+            colour, label = "red", "error  "
+        else:
+            colour, label = "yellow", "warning"
+        why = (
+            f" [dim](exempt: {escape(f.exempt_reason)})[/dim]"
+            if f.exempted
+            else ""
+        )
         console.print(
-            f"[{colour}]{label}[/{colour}] [dim]{f.code}[/dim] {f.message}"
+            f"[{colour}]{label}[/{colour}] [dim]{f.code}[/dim]"
+            f" {f.message}{why}"
         )
 
 
 def _lint_errors(event: EventContract) -> list[Finding]:
-    return [f for f in lint_contract(event) if f.is_error]
+    return lint_errors(lint_contract(event))
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -272,7 +284,7 @@ def validate(
 
     Catches parse errors, missing fields, bad values, invalid BigQuery
     types and strategies, duplicate or unsafe column declarations, and
-    staging configs that reference columns the model never selects —
+    staging configs that reference columns the model never selects,
     all in one pass, before you spend a round-trip to BigQuery.
     """
     try:
@@ -283,13 +295,18 @@ def validate(
 
     findings = lint_contract(event)
     _print_findings(findings)
-    errs = [f for f in findings if f.is_error]
-    warns = [f for f in findings if not f.is_error]
+    errs = lint_errors(findings)
+    warns = lint_warnings(findings)
+    # Neither count includes exemptions, so a clean run with standing
+    # exemptions must not read as a clean bill of health.
+    exempt = sum(1 for f in findings if f.exempted)
+    exempt_note = f", {exempt} exempt" if exempt else ""
 
     if errs or (strict and warns):
         console.print(
             f"[red]FAIL[/red] [bold]{event.name}[/bold]:"
             f" {len(errs)} error(s), {len(warns)} warning(s)"
+            f"{exempt_note}"
             + (" [dim](--strict)[/dim]" if strict and not errs else "")
         )
         raise typer.Exit(1)
@@ -299,7 +316,7 @@ def validate(
         f"  Source:   {event.source.fqn}\n"
         f"  Key:      {', '.join(event.unique_key)}\n"
         f"  Columns:  {len(event.staging.columns)} staging declared\n"
-        f"  Warnings: {len(warns)}"
+        f"  Warnings: {len(warns)}{exempt_note}"
     )
 
 
@@ -546,7 +563,7 @@ def check(
 
     Renders every contract in memory and compares the output against the
     files on disk. Nothing is written. Exit code 0 means everything is
-    in sync; 1 means drift, missing files, or contract errors — wire it
+    in sync; 1 means drift, missing files, or contract errors. Wire it
     straight into CI next to your linter.
 
     \b
@@ -728,7 +745,7 @@ def new(
 
     Introspects the table and writes a contract with every column
     declared in staging, plus guessed unique_key and loaded_at_field
-    (marked TODO — confirm them before the contract goes live).
+    (marked TODO, so confirm them before the contract goes live).
     Requires GCP Application Default Credentials.
     """
     from modelgen.introspect import (

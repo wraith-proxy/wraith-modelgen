@@ -16,6 +16,8 @@ from modelgen.config import ConfigError, ModelgenConfig
 from modelgen.contract import (
     ContractError,
     EventContract,
+    FreshnessConfig,
+    FreshnessThreshold,
     StagingColumn,
 )
 from modelgen.generator import (
@@ -69,6 +71,9 @@ schema:
             field: RECEIVED_AT
             dataType: timestamp
             granularity: day
+          freshness:
+            warnAfter: {count: 12, period: hour}
+            errorAfter: {count: 24, period: hour}
           clusterBy: [USER_ID]
       - property: modelgenStaging
         value:
@@ -299,6 +304,22 @@ class TestContractValidation:
         with pytest.raises(ContractError, match="Failed to parse YAML"):
             EventContract.from_file(p)
 
+    def test_malformed_exemption_list(self, tmp_path):
+        p = tmp_path / "c.yml"
+        p.write_text(
+            CONTRACT_YAML.replace(
+                "      - property: modelgenLoadedAtField\n"
+                "        value: RECEIVED_AT\n",
+                "      - property: modelgenLoadedAtField\n"
+                "        value: RECEIVED_AT\n"
+                "      - property: modelgenExempt\n"
+                "        value:\n"
+                "          - just a string\n",
+            )
+        )
+        with pytest.raises(ContractError, match="modelgenExempt"):
+            EventContract.from_file(p)
+
 
 class TestCompositeKeys:
     def test_composite_unique_key(self, tmp_path):
@@ -398,6 +419,53 @@ class TestRawGeneration:
         assert parsed["version"] == 2
         assert parsed["models"][0]["name"] == "raw__user_signed_up"
         assert parsed["models"][0]["config"]["schema"] == "raw"
+
+    def test_yml_emits_source_freshness(
+        self, contract, introspector, tmp_path
+    ):
+        generate(contract, introspector, tmp_path, Layer.RAW)
+        parsed = yaml.safe_load(
+            (tmp_path / "raw__user_signed_up.yml").read_text()
+        )
+        table = parsed["sources"][0]["tables"][0]
+        assert table["freshness"] == {
+            "warn_after": {"count": 12, "period": "hour"},
+            "error_after": {"count": 24, "period": "hour"},
+        }
+
+    def test_yml_omits_freshness_when_undeclared(
+        self, contract, introspector, tmp_path
+    ):
+        contract.raw.freshness = None
+        generate(contract, introspector, tmp_path, Layer.RAW)
+        text = (tmp_path / "raw__user_signed_up.yml").read_text()
+        parsed = yaml.safe_load(text)
+        assert "freshness" not in text
+        assert "loaded_at_field" in parsed["sources"][0]["tables"][0]
+
+    def test_yml_omits_freshness_when_only_one_bound(
+        self, contract, introspector, tmp_path
+    ):
+        contract.raw.freshness = FreshnessConfig(
+            warn_after=FreshnessThreshold(6, "hour")
+        )
+        generate(contract, introspector, tmp_path, Layer.RAW)
+        parsed = yaml.safe_load(
+            (tmp_path / "raw__user_signed_up.yml").read_text()
+        )
+        table = parsed["sources"][0]["tables"][0]
+        assert table["freshness"] == {
+            "warn_after": {"count": 6, "period": "hour"}
+        }
+
+    def test_empty_freshness_block_parses_as_undeclared(self):
+        text = CONTRACT_YAML.replace(
+            "          freshness:\n"
+            "            warnAfter: {count: 12, period: hour}\n"
+            "            errorAfter: {count: 24, period: hour}\n",
+            "          freshness: {}\n",
+        )
+        assert EventContract.from_text(text).raw.freshness is None
 
 
 class TestRawWithoutDedup:

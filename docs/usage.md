@@ -65,7 +65,7 @@ as a schema property with introspected types and descriptions, guesses the
 `received`/`loaded`/`created`/`*_at`), derives partition config from the
 loaded-at column, and pre-wires `required: true` + `unique: true`
 (→ `not_null`/`unique`) on the key. Guesses are flagged in the leading
-`# TODO` comment — review them before the contract goes live. `RECORD` and
+`# TODO` comment. Review them before the contract goes live. `RECORD` and
 `REPEATED` columns are declared without a cast (`physicalType` omitted).
 
 ---
@@ -79,7 +79,7 @@ No BigQuery credentials or network access needed.
 modelgen validate contract.yml [--strict]
 ```
 
-All findings are reported in one pass — typo'd incremental strategies,
+All findings are reported in one pass: typo'd incremental strategies,
 casts to types BigQuery has never heard of, duplicate columns, unsafe
 identifiers, partition or cluster references to undeclared staging
 columns, and keys the staging model never selects. See the
@@ -122,7 +122,7 @@ modelgen gen contract.yml --staging -o ./models/staging
 # Preview what would be written
 modelgen gen contract.yml --raw --dry-run
 
-# Offline — no BigQuery connection needed
+# Offline, no BigQuery connection needed
 modelgen gen contract.yml --raw --from-contract
 ```
 
@@ -175,8 +175,8 @@ modelgen check [OPTIONS]
 | `-v`, `--verbose` | Debug logging |
 | `--from-contract` | Skip BigQuery introspection for all contracts |
 
-Because generation is deterministic — same contract, same source
-schema, byte-identical output — `check` turns that guarantee into a CI
+Because generation is deterministic (same contract and source schema give
+byte-identical output), `check` turns that guarantee into a CI
 gate. Hand-edited models, stale regenerations, and contract changes
 that never got committed all fail loudly:
 
@@ -196,7 +196,7 @@ Every command follows the same convention:
 
 | Code | Meaning |
 |---|---|
-| `0` | Success — or, for `check`, everything in sync |
+| `0` | Success, or for `check`, everything in sync |
 | `1` | Contract, generation, introspection, or drift failure |
 | `2` | Usage error (bad flags, malformed table reference) |
 
@@ -207,7 +207,7 @@ Every command follows the same convention:
 By default, `gen`, `run`, and `check` introspect BigQuery at generation
 time to validate column references and populate the raw schema YAML. If
 no GCP Application Default Credentials are available, they fall back to
-**contract-only mode** automatically — no BigQuery connection is made.
+**contract-only mode** automatically, and no BigQuery connection is made.
 
 You can also force contract-only mode explicitly with `--from-contract`:
 
@@ -222,14 +222,14 @@ modelgen check --from-contract
 | Behaviour | With BQ | `--from-contract` |
 |---|---|---|
 | Column list in `raw_schema.yml` | Full source schema | Contract staging columns + key fields only |
-| Schema drift detection | Yes — fails if staging refs missing column | Skipped |
+| Schema drift detection | Yes, fails if staging refs a missing column | Skipped |
 | New source column notices | Yes | Not reported (source not queried) |
 | BQ credentials required | Yes | No |
 
 Contract-only mode is useful for local development without a service
 account, CI pipelines without GCP access, and bootstrapping a new
 contract before the source table exists. `modelgen new` is the one
-command that always needs credentials — it has nothing to work from
+command that always needs credentials, since it has nothing to work from
 but the live table.
 
 ---
@@ -249,7 +249,7 @@ generated `ds` column. The daily run needs nothing:
 dbt run --select stg__user_signed_up
 ```
 
-Backfilling a past date uses the same SQL — pass the date instead of
+Backfilling a past date uses the same SQL. Pass the date instead of
 letting it default to dbt's run date. Dates are independent, so run as
 many in parallel as your warehouse will take:
 
@@ -280,4 +280,4 @@ Source schemas change. wraith-modelgen validates the boundary and reports what b
 | Source column dropped | Generation fails if staging still references it. Update the contract or restore the source column. |
 
 !!! tip "The layering principle"
-    Raw absorbs source drift on each regeneration — columns are explicit, introspected at gen time. Staging absorbs raw drift. Downstream consumers see a stable interface.
+    Raw absorbs source drift on each regeneration, with columns explicit and introspected at gen time. Staging absorbs raw drift. Downstream consumers see a stable interface.

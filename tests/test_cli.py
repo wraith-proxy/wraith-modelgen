@@ -55,6 +55,9 @@ schema:
           dataset: raw
           incrementalStrategy: merge
           dedup: true
+          freshness:
+            warnAfter: {count: 12, period: hour}
+            errorAfter: {count: 24, period: hour}
       - property: modelgenStaging
         value:
           dataset: staging
@@ -652,3 +655,72 @@ class TestRunCommandOutputDirs:
         assert (
             tmp_path / "out" / "staging" / "stg__user_signed_up.sql"
         ).exists()
+
+
+# ---------------------------------------------------------------------------
+# Lint exemptions
+# ---------------------------------------------------------------------------
+
+_EXEMPT_KEY = (
+    "        required: true\n"
+    "        unique: true\n"
+    "        customProperties:\n"
+    "          - property: modelgenExempt\n"
+    "            value:\n"
+    "              - rule: missing-column-description\n"
+    '                reason: "key column, the name says it all"\n'
+)
+_EXEMPT_TS = (
+    "        physicalType: TIMESTAMP\n"
+    "        required: true\n"
+    "        customProperties:\n"
+    "          - property: modelgenExempt\n"
+    "            value:\n"
+    "              - rule: missing-column-description\n"
+    '                reason: "pipeline metadata, not consumer facing"\n'
+)
+
+EXEMPT_YAML = CONTRACT_YAML.replace(
+    "        required: true\n        unique: true\n", _EXEMPT_KEY
+).replace(
+    "        physicalType: TIMESTAMP\n        required: true\n", _EXEMPT_TS
+)
+
+
+class TestExemptions:
+    """CONTRACT_YAML warns on both undocumented columns; exempt them."""
+
+    def _write(self, tmp_path, text) -> Path:
+        p = tmp_path / "exempt.yml"
+        p.write_text(text)
+        return p
+
+    def test_exempted_warnings_pass_strict(self, tmp_path):
+        p = self._write(tmp_path, EXEMPT_YAML)
+        result = runner.invoke(app, ["validate", str(p), "--strict"])
+        assert result.exit_code == 0, strip_ansi(result.output)
+        assert "OK" in strip_ansi(result.output)
+
+    def test_exemption_reason_is_printed(self, tmp_path):
+        p = self._write(tmp_path, EXEMPT_YAML)
+        result = runner.invoke(app, ["validate", str(p)])
+        # Rich wraps to terminal width; collapse it before matching.
+        output = " ".join(strip_ansi(result.output).split())
+        assert output.count("exempt ") == 2
+        assert "the name says it all" in output
+        assert "pipeline metadata, not consumer facing" in output
+
+    def test_summary_counts_standing_exemptions(self, tmp_path):
+        p = self._write(tmp_path, EXEMPT_YAML)
+        result = runner.invoke(app, ["validate", str(p)])
+        output = " ".join(strip_ansi(result.output).split())
+        assert "Warnings: 0, 2 exempt" in output
+
+    def test_exemption_without_a_reason_fails(self, tmp_path):
+        p = self._write(
+            tmp_path,
+            EXEMPT_YAML.replace("key column, the name says it all", ""),
+        )
+        result = runner.invoke(app, ["validate", str(p)])
+        assert result.exit_code == 1
+        assert "invalid-exemption-reason" in strip_ansi(result.output)

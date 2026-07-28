@@ -15,7 +15,7 @@ Do you have a source table with the right types already?
                   YES → Pattern C: create_table_clone_schema
 ```
 
-## Pattern A — Schema Inference
+## Pattern A: Schema Inference
 
 `utils.create_table_like_source`
 
@@ -34,7 +34,7 @@ CALL `project.utils.create_table_like_source`(
 );
 ```
 
-## Pattern B — Explicit Schema
+## Pattern B: Explicit Schema
 
 `utils.create_table_explicit`
 
@@ -68,7 +68,7 @@ CALL `project.utils.create_table_explicit`(
 );
 ```
 
-## Pattern C — Clone Schema
+## Pattern C: Clone Schema
 
 `utils.create_table_clone_schema`
 
@@ -106,7 +106,7 @@ CALL `project.utils.describe_dataset`('my-project', 'staging');
 
 ## Notes
 
-- All procedures use `CREATE OR REPLACE TABLE` — idempotent, safe to rerun.
-- `%T` in FORMAT auto-quotes string parameters — injection-safe for identifiers passed as values.
+- All procedures use `CREATE OR REPLACE TABLE`, so they are idempotent and safe to rerun.
+- `%T` in FORMAT auto-quotes string parameters, making it injection-safe for identifiers passed as values.
 - Dataset location is set by Terraform, not these procedures. Never set location in table DDL.
-- Labels are BQ-level metadata queryable via `INFORMATION_SCHEMA.TABLE_OPTIONS` — use them for cost attribution and governance.
+- Labels are BQ-level metadata queryable via `INFORMATION_SCHEMA.TABLE_OPTIONS`. Use them for cost attribution and governance.

@@ -21,8 +21,9 @@ its BigQuery/dbt specifics in ODCS `customProperties`:
     property.unique          -> unique test
     property.logicalTypeOptions.validValues -> accepted_values test
     property.classification  -> pii/psi; drives encryption in staging
+    property.customProperties -> modelgenExempt (column-scoped)
   schema[].customProperties  -> modelgenLoadedAtField, modelgenSubjectField,
-                                modelgenRaw, modelgenStaging
+                                modelgenRaw, modelgenStaging, modelgenExempt
 
 Staging materialises as a datestamped daily snapshot by default: one full
 copy of the dimension per `ds` partition. `materialization: incremental`
@@ -70,6 +71,14 @@ class ColumnTest:
     args: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class Exemption:
+    """A justified opt-out from one lint rule, contract- or column-scoped."""
+
+    rule: str
+    reason: str
+
+
 @dataclass
 class StagingColumn:
     """One column in staging: source ref + rename + cast + tests."""
@@ -79,7 +88,8 @@ class StagingColumn:
     type: str = ""  # BigQuery type to cast to (default: no cast)
     description: str = ""
     tests: list[ColumnTest] = field(default_factory=list)
-    classification: str = ""  # "" | "pii" | "psi" — drives encryption
+    classification: str = ""  # "" | "pii" | "psi": drives encryption
+    exemptions: list[Exemption] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.source:
@@ -128,6 +138,7 @@ class StagingColumn:
             description=prop.get("description", ""),
             tests=tests,
             classification=(prop.get("classification") or "").strip().lower(),
+            exemptions=_exemptions(prop),
         )
 
 
@@ -176,6 +187,42 @@ class PartitionConfig:
         )
 
 
+@dataclass(frozen=True)
+class FreshnessThreshold:
+    """One dbt source-freshness bound. Validation lives in lint."""
+
+    count: Any
+    period: str
+
+    @classmethod
+    def from_raw(cls, raw: dict | None) -> FreshnessThreshold | None:
+        if raw is None:
+            return None
+        return cls(
+            count=raw.get("count", 0),
+            period=str(raw.get("period", "")),
+        )
+
+
+@dataclass(frozen=True)
+class FreshnessConfig:
+    warn_after: FreshnessThreshold | None = None
+    error_after: FreshnessThreshold | None = None
+
+    @classmethod
+    def from_raw(cls, raw: dict | None) -> FreshnessConfig | None:
+        if raw is None:
+            return None
+        warn_after = FreshnessThreshold.from_raw(raw.get("warnAfter"))
+        error_after = FreshnessThreshold.from_raw(raw.get("errorAfter"))
+        # A freshness block with neither bound would render an empty dbt
+        # `freshness:` key, which dbt rejects. Treat it as undeclared so
+        # lint reports it as missing rather than generating broken YAML.
+        if warn_after is None and error_after is None:
+            return None
+        return cls(warn_after=warn_after, error_after=error_after)
+
+
 SNAPSHOT_PARTITION_FIELD = "ds"
 SNAPSHOT_STRATEGY = "insert_overwrite"
 _SNAPSHOT_PARTITION = PartitionConfig(
@@ -197,6 +244,7 @@ class RawConfig:
     dedup: bool = False
     partition_by: PartitionConfig | None = None
     cluster_by: list[str] = field(default_factory=list)
+    freshness: FreshnessConfig | None = None
 
     @classmethod
     def from_raw(cls, raw: dict | None) -> RawConfig:
@@ -207,6 +255,7 @@ class RawConfig:
             dedup=raw.get("dedup", False),
             partition_by=PartitionConfig.from_raw(raw.get("partitionBy")),
             cluster_by=_cluster_by(raw),
+            freshness=FreshnessConfig.from_raw(raw.get("freshness")),
         )
 
 
@@ -230,7 +279,7 @@ class StagingConfig:
         raw = raw or {}
         if "dedup" in raw:
             raise ContractError(
-                "modelgenStaging does not support 'dedup' — dedup is a"
+                "modelgenStaging does not support 'dedup'. Dedup is a"
                 " raw-layer concern, and a snapshot is the full dimension."
             )
         # A contract can opt out of a staging model (raw-only) while still
@@ -241,7 +290,7 @@ class StagingConfig:
         snapshot = materialization == "snapshot"
         # Snapshot mode implies partitioning on ds, so the contract does not
         # restate it. A declared partitionBy is kept as-is and lint rejects
-        # it if it disagrees — silently overriding it would hide the mistake.
+        # it if it disagrees, since silently overriding it hides the mistake.
         declared_partition = PartitionConfig.from_raw(raw.get("partitionBy"))
         if snapshot and declared_partition is None:
             declared_partition = _SNAPSHOT_PARTITION
@@ -267,7 +316,7 @@ def _unique_key_from_properties(props: list[dict]) -> list[str]:
     if not keys:
         raise ContractError(
             "No primaryKey property found. Mark the key column(s) with"
-            " primaryKey: true — they become the dbt unique_key."
+            " primaryKey: true. They become the dbt unique_key."
         )
     return keys
 
@@ -279,6 +328,22 @@ def _custom_props(obj: dict) -> dict[str, Any]:
         if "property" in cp:
             out[cp["property"]] = cp.get("value")
     return out
+
+
+def _exemptions(obj: dict) -> list[Exemption]:
+    """Read modelgenExempt off any object carrying customProperties."""
+    raw = _custom_props(obj).get("modelgenExempt") or []
+    if not isinstance(raw, list) or not all(isinstance(e, dict) for e in raw):
+        raise ContractError(
+            "modelgenExempt must be a list of {rule, reason} mappings."
+        )
+    return [
+        Exemption(
+            rule=str(e.get("rule", "")),
+            reason=str(e.get("reason", "")),
+        )
+        for e in raw
+    ]
 
 
 def _bigquery_server(servers: list[dict]) -> dict:
@@ -301,6 +366,7 @@ class EventContract:
     raw: RawConfig
     staging: StagingConfig
     subject_field: str = ""  # source column identifying the data subject
+    exemptions: list[Exemption] = field(default_factory=list)
 
     @property
     def classified_columns(self) -> list[StagingColumn]:
@@ -401,4 +467,5 @@ class EventContract:
                 [StagingColumn.from_property(p) for p in props],
             ),
             subject_field=cfg.get("modelgenSubjectField") or "",
+            exemptions=_exemptions(obj),
         )

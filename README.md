@@ -9,7 +9,7 @@
 
 **wraith-modelgen** is a BigQuery dbt model scaffolder. Feed it a YAML data contract, get back a pair of sovereign data products: an Origin (raw) layer that passes everything through, and a Consumption (staging) layer that holds the stable line for downstream consumers.
 
-Source schemas change. Columns get renamed. Types get tightened. New fields appear without ceremony. In most analytics codebases this is a downstream catastrophe: dashboards break, FDPs fail, the analytics team gets paged at 03:00, and someone files a ticket asking whether dbt itself is broken.
+Source schemas change. Columns get renamed, types get tightened, and new fields appear without warning. In most analytics codebases that change lands downstream: dashboards break, FDPs fail, and the analytics team finds out from a support ticket.
 
 wraith-modelgen makes the data contract the change-management mechanism. The source team updates it as part of their release. wraith-modelgen regenerates the models. Downstream sees what it sees. Nothing breaks unless something it actually depended on disappears, which triggers a generation failure with the column name.
 
@@ -27,7 +27,7 @@ You'll also need Application Default Credentials for BigQuery introspection:
 gcloud auth application-default login
 ```
 
-Everything except `new` also runs without them — `--from-contract` generates
+Everything except `new` also runs without them. `--from-contract` generates
 from the contract's declared columns alone (and is the automatic fallback when
 no credentials are found). That's how CI runs it.
 
@@ -43,7 +43,7 @@ modelgen run                                   # regenerate every layer of every
 modelgen check --diff                          # CI: fail if committed models drifted
 ```
 
-Single layers when you need them — `--raw` and `--staging` are mutually exclusive:
+Single layers when you need them. `--raw` and `--staging` are mutually exclusive:
 
 ```bash
 modelgen gen contract.yml --raw     -o ./models/raw
@@ -55,7 +55,7 @@ modelgen gen contract.yml --raw --dry-run  # preview without writing
 |---|---|
 | `init` | Scaffold project layout: `.modelgen.yml`, `contracts/`, `models/` |
 | `new` | Bootstrap a draft contract from a live BigQuery table, keys guessed and marked TODO |
-| `validate` | Offline structural + semantic lint; `--strict` promotes warnings to failures |
+| `validate` | Offline structural + semantic lint; `--strict` promotes warnings to failures. A rule that's wrong for one contract can be exempted with `modelgenExempt`; a reason is mandatory, and exempted findings still print |
 | `gen` | Generate one layer from one contract |
 | `run` | Regenerate every layer of every contract under `.modelgen.yml` |
 | `check` | Render in memory, diff against disk, exit non-zero on drift. Writes nothing. |
@@ -95,6 +95,9 @@ schema:
           dedup: true                    # row_number() partition by primaryKey
           partitionBy: { field: RECEIVED_AT, dataType: timestamp, granularity: day }
           clusterBy: [USER_ID]
+          freshness:                     # -> dbt source freshness
+            warnAfter:  { count: 12, period: hour }
+            errorAfter: { count: 24, period: hour }
       - property: modelgenStaging
         value:
           dataset: staging
@@ -106,7 +109,7 @@ schema:
         physicalName: EVENT_ID          # source column name
         logicalType: string
         physicalType: STRING            # cast target
-        description: "..."
+        description: "..."              # >= 50 chars, and not just the name
         primaryKey: true                # contributes to dbt unique_key
         primaryKeyPosition: 1
         required: true                  # → not_null test
@@ -169,6 +172,37 @@ Validation runs as part of `modelgen gen --staging`. If it passes, the generated
 
 ---
 
+## ✅ Contract standards
+
+`modelgen validate --strict` is the gate. Beyond the structural checks, it
+holds contracts to a few standards that only matter once more than one team
+reads them:
+
+| Standard | Rule |
+|---|---|
+| Every column is documented | `description` of at least 50 characters that says something the column name does not |
+| Every source declares staleness | `modelgenRaw.freshness` with `warnAfter` / `errorAfter`, which becomes the dbt `freshness:` block |
+| Every key is tested | `primaryKey` properties carry `required` and `unique` |
+| Exceptions are written down | `modelgenExempt` opts out of one rule, and a `reason` is mandatory |
+
+An exemption is scoped either to the whole contract or to a single column,
+and the two never cross:
+
+```yaml
+      - name: internal_note
+        customProperties:
+          - property: modelgenExempt
+            value:
+              - rule: low-quality-column-description
+                reason: "deprecated in TJP-00042, drops next quarter"
+```
+
+Exempted findings still print on every `validate` run, labelled `exempt` with
+their reason, and the summary counts them. They stop blocking, they do not
+stop being visible. Full rule list: **[Lint Rules](docs/linting.md)**.
+
+---
+
 ## 🏗️ What gets generated
 
 **For `--raw`:**
@@ -182,7 +216,7 @@ Validation runs as part of `modelgen gen --staging`. If it passes, the generated
 Staging defaults to a **datestamped daily snapshot**: `insert_overwrite`
 partitioned on a generated `ds` column, one full copy of the dimension per
 day. History is `where ds = '<date>'`, and any date backfills in parallel
-with the same SQL — the orchestrator injects it:
+with the same SQL. The orchestrator injects it:
 
 ```bash
 dbt run --select stg__event --vars '{ds: 2026-07-27}'
@@ -192,6 +226,12 @@ The grain is (key, `ds`), so the generated `unique` test is scoped to the
 partition the run writes. `materialization: incremental` on
 `modelgenStaging` opts back into a high-water-mark load, and then
 `incrementalStrategy` and `partitionBy` are yours to declare.
+
+Both layers load incrementally. Raw merges on the unique key, staging replaces
+one `ds` partition per run. Neither rebuilds the whole table, and no generated
+model ever emits `CREATE OR REPLACE TABLE ... AS SELECT`. Full rebuild is
+available as a documented exception rather than a default, which is covered in
+**[Tooling Decisions](docs/bigquery/decisions.md)**.
 
 ---
 
@@ -232,7 +272,8 @@ uv run cz commit
 2. **Introspection at gen time.** The warehouse is the source of truth for column names and types. Drift is impossible because nothing is duplicated.
 3. **Deterministic output.** Same contract + same source schema = byte-identical files. `modelgen check` turns this into a CI gate.
 4. **Strict failure on missing columns.** No silent passes. If the contract references a column the source no longer has, generation fails with the column name.
-5. **BigQuery only.** The introspection module is BQ-native. Add a different `Introspector` implementation if you need another warehouse.
+5. **Standards are enforced, exceptions are written down.** A rule that is wrong for one contract is exempted in the contract itself, with a reason, and the exemption stays visible on every run.
+6. **BigQuery only.** The introspection module is BQ-native. Add a different `Introspector` implementation if you need another warehouse.
 
 ---
 

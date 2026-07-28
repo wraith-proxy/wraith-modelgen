@@ -43,9 +43,9 @@ flowchart LR
     CTR -. "declares columns,\ncasts, renames" .-> STG
 ```
 
-**Raw** mirrors the source schema, with columns introspected explicitly at generation time. New source columns appear after the next `modelgen run` — not automatically. The source team can add columns without coordinating with analytics, but a regeneration is required to pick them up.
+**Raw** mirrors the source schema, with columns introspected explicitly at generation time. New source columns appear after the next `modelgen run`, not automatically. The source team can add columns without coordinating with analytics, but a regeneration is required to pick them up.
 
-**Staging** is the consumer contract. Explicit column selection, renames, and casts. Schema drift is absorbed here; downstream consumers only see the stable contract names. It materialises as a datestamped daily snapshot by default — one full copy of the dimension per `ds` partition — so history is a partition filter and backfills are independent of each other.
+**Staging** is the consumer contract. Explicit column selection, renames, and casts. Schema drift is absorbed here; downstream consumers only see the stable contract names. It materialises as a datestamped daily snapshot by default, one full copy of the dimension per `ds` partition, so history is a partition filter and backfills are independent of each other.
 
 ---
 

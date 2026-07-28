@@ -91,8 +91,8 @@ CALL `project.utils.verify_backfill`(
 
 Runs two checks after load:
 
-1. **Row counts by day** — partition date, row count, earliest/latest timestamp. Spot gaps in coverage.
-2. **Overlap check** — any rows with `batch_id = BACKFILL-*` that fall inside the incremental window (should be zero).
+1. **Row counts by day**: partition date, row count, earliest/latest timestamp. Spot gaps in coverage.
+2. **Overlap check**: any rows with `batch_id = BACKFILL-*` that fall inside the incremental window (should be zero).
 
 ```sql
 CALL `project.utils.verify_backfill`(
@@ -117,7 +117,7 @@ Next step is rebuilding derived layers from the now-populated raw table:
 ```
 1. Run staging snapshots, one ds per historical date:
      dbt run --select stg__event --vars '{ds: YYYY-MM-DD}'
-   Dates are independent — run them in parallel, in any order.
+   Dates are independent, so run them in parallel, in any order.
 2. Run SCD2 rebuild    (rebuild_scd2, regulated carve-out only)
 3. Run mart models     (full refresh)
 4. Verify row counts and date coverage at each layer
