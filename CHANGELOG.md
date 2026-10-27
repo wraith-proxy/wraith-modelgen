@@ -8,6 +8,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Initial commit. Ghost Stack project scaffold. Nothing generated yet.
 
+## v0.14.1 (2026-10-27)
+
 ## v0.14.0 (2026-10-26)
 
 ## v0.13.0 (2026-07-28)
