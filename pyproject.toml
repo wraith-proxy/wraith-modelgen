@@ -108,3 +108,6 @@ select = ["E", "F", "I"]
 dev = [
     "detect-secrets>=1.5.0",
 ]
+
+[tool.uv]
+override-dependencies = ["black>=26.10.1"]
