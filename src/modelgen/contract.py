@@ -48,21 +48,51 @@ import jsonschema
 import yaml
 
 ODCS_API_VERSION = "v3.0.2"
-_SCHEMA_PATH = (
-    Path(__file__).parent / "schema" / "odcs-json-schema-v3.0.2.json"
-)
+SUPPORTED_ODCS_VERSIONS = ("v3.0.2", "v3.1.0", "v3.2.0")
+_SCHEMA_DIR = Path(__file__).parent / "schema"
 
 
 class ContractError(ValueError):
     """Raised when a contract is malformed or references invalid state."""
 
 
-@lru_cache(maxsize=1)
-def _odcs_validator() -> jsonschema.protocols.Validator:
-    schema = json.loads(_SCHEMA_PATH.read_text())
+@lru_cache(maxsize=None)
+def _odcs_validator(
+    version: str = ODCS_API_VERSION,
+) -> jsonschema.protocols.Validator:
+    path = _SCHEMA_DIR / f"odcs-json-schema-{version}.json"
+    schema = json.loads(path.read_text())
     cls = jsonschema.validators.validator_for(schema)
     cls.check_schema(schema)
     return cls(schema)
+
+
+def odcs_schema_errors(doc: dict[str, Any]) -> list[Any]:
+    """Validate ``doc`` against the bundled schema for its apiVersion.
+
+    A missing or non-string apiVersion is validated against the default
+    (v3.0.2) schema, which reports it. An unknown string version raises
+    ContractError listing the supported versions.
+    """
+    version = doc.get("apiVersion")
+    if not isinstance(version, str):
+        version = ODCS_API_VERSION
+    elif version not in SUPPORTED_ODCS_VERSIONS:
+        # v2.x and v3.0.0/3.0.1 stay accepted via the v3.0.2 schema enum.
+        if version in _LEGACY_ODCS_VERSIONS:
+            version = ODCS_API_VERSION
+        else:
+            raise ContractError(
+                f"Contract is not valid ODCS: unsupported apiVersion"
+                f" {version!r}. Supported versions:"
+                f" {', '.join(SUPPORTED_ODCS_VERSIONS)}."
+            )
+    return sorted(
+        _odcs_validator(version).iter_errors(doc), key=lambda e: e.path
+    )
+
+
+_LEGACY_ODCS_VERSIONS = ("v3.0.1", "v3.0.0", "v2.2.2", "v2.2.1", "v2.2.0")
 
 
 @dataclass(frozen=True)
@@ -410,9 +440,7 @@ class EventContract:
                 f"Contract root must be a mapping, got {type(doc).__name__}"
             )
 
-        errors = sorted(
-            _odcs_validator().iter_errors(doc), key=lambda e: e.path
-        )
+        errors = odcs_schema_errors(doc)
         if errors:
             first = errors[0]
             loc = "/".join(str(p) for p in first.path) or "<root>"
