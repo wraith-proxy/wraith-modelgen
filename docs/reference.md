@@ -185,6 +185,12 @@ DuckDB limits, enforced by lint or generation:
   one. Otherwise the first server of a supported type, in contract order.
   Otherwise an error listing `bigquery, duckdb, local`.
 
+Introspection follows the dialect. `gen`, `run` and `check` query BigQuery only
+when the selected server uses the BigQuery dialect, Application Default
+Credentials exist, and `--from-contract` is absent. A DuckDB or local contract
+always uses contract-only introspection, with no "No GCP credentials" notice.
+`new` stays BigQuery-only.
+
 ---
 
 ## Sources layer
@@ -233,7 +239,7 @@ modelgen sources contracts/extract/bus-positions-extract.odcs.yaml -o models/sta
 ```
 
 Keep extract contracts out of the `contracts` glob in `.modelgen.yml`: event
-contracts require `modelgenLoadedAtField`, sources contracts do not carry it.
+contracts require `modelgenLoadedAtField`, extract contracts do not carry it.
 
 ---
 
@@ -316,7 +322,7 @@ from deduplicated
 where _modelgen_rn = 1
 ```
 
-Raw uses source-side column names throughout. Columns are listed explicitly, introspected from BigQuery (or from the contract in `--from-contract` mode) at generation time. Regenerate when the source schema changes.
+Raw uses source-side column names throughout. Columns are listed explicitly, introspected from BigQuery (or from the contract under contract-only introspection) at generation time. Regenerate when the source schema changes.
 
 ### `raw__<name>.yml`
 

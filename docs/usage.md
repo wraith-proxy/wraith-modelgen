@@ -12,7 +12,7 @@ flowchart LR
     C --> D["modelgen validate"]
     D --> E{Valid?}
     E -->|no| C
-    E -->|yes| F["modelgen run\n+ schema + sources"]
+    E -->|yes| F["modelgen run"]
     F --> G["Commit contracts\n+ generated files"]
     G --> H["modelgen check\nin CI"]
     H -->|drift| F
@@ -23,14 +23,17 @@ flowchart LR
 modelgen init                                              # once per repo
 modelgen new my-project.landing.user_signups               # draft a contract
 modelgen validate contracts/user_signups.yml               # lint it
-modelgen run                                               # raw + staging for every contract
+modelgen run                                               # raw + staging, plus yml for configured produced/extract contracts
 modelgen schema contracts/marts.odcs.yaml -o models/marts  # models yml for tables this project produces
 modelgen sources contracts/extract.odcs.yaml -o models/staging  # sources yml for tables this project reads
 modelgen check --diff                                      # CI: prove nothing drifted
 ```
 
-`run` does not write the schema or sources yml. Generate those with
-`schema` and `sources`, commit the output, and let `check` gate it.
+`run` renders all three modes. With `schema_contracts`/`schema_output` and/or
+`sources_contracts`/`sources_output` set in `.modelgen.yml`, it also writes the
+produced and extract yml and their singular tests (honouring `tests_output`),
+so `run` then `check` is a clean round trip. The separate `schema` and
+`sources` commands stay valid and are no longer required when the keys are set.
 
 ---
 
@@ -196,8 +199,9 @@ Flags match `schema` (including `--tests-output`), except there is no
 
 ### `modelgen run`
 
-Find all event contracts and regenerate the raw and staging layers in one
-command. It does **not** write schema or sources yml.
+Regenerate every mode `.modelgen.yml` names in one command: raw and staging
+layers for event contracts, plus the produced and extract yml and their
+singular tests when the `schema_*` and `sources_*` keys are set.
 
 ```bash
 modelgen run [OPTIONS]
@@ -215,6 +219,11 @@ Staging generation is skipped for contracts with no columns declared;
 raw-only contracts are supported. Each source table is introspected
 once per run, even when both layers use it.
 
+Unmapped quality rules print on stderr and `run` still exits `0`. `run` has no
+`--strict`; use `schema --strict` or `sources --strict` as a CI gate. `run`
+exits `1` when a `schema_contracts` or `sources_contracts` pattern matches
+nothing. A `*_contracts` key without its `*_output` key is skipped silently.
+
 ---
 
 ### `modelgen check`
@@ -231,7 +240,7 @@ modelgen check [OPTIONS]
 |---|---|
 | `-c`, `--config PATH` | Path to `.modelgen.yml`. Auto-discovered if not given |
 | `--diff` | Print a unified diff for every drifted file |
-| `-s`, `--server ID` | Pick the server by its `server:` id. Sources contracts ignore it |
+| `-s`, `--server ID` | Pick the server by its `server:` id. Extract contracts ignore it |
 | `-v`, `--verbose` | Debug logging |
 | `--from-contract` | Skip BigQuery introspection for all contracts |
 
@@ -284,12 +293,12 @@ tests_output: dbt/tests
 | `contracts` | `contracts/*.yml` | `run`, `check` |
 | `raw_output` | `models/raw` | `run`, `check` |
 | `staging_output` | `models/staging` | `run`, `check` |
-| `schema_contracts`, `schema_output` | unset | `check` |
-| `sources_contracts`, `sources_output` | unset | `check` |
-| `tests_output` | unset | `check` |
+| `schema_contracts`, `schema_output` | unset | `run`, `check` |
+| `sources_contracts`, `sources_output` | unset | `run`, `check` |
+| `tests_output` | unset | `run`, `check` |
 
 - Set each `*_contracts` key together with its `*_output`; a pattern without
-  its output is not checked, and `check` does not say so.
+  its output is skipped silently by `run` and `check`.
 - `tests_output` replaces the leading `tests` of generated singular-test
   paths. Pair it with `--tests-output` on `schema`/`sources`.
 - The default `contracts` glob is `*.yml`. `*.odcs.yaml` files need their own
@@ -298,12 +307,14 @@ tests_output: dbt/tests
 
 ---
 
-## Offline / contract-only mode
+## Offline / contract-only introspection
 
-By default, `gen`, `run`, and `check` introspect BigQuery at generation
-time to validate column references and populate the raw schema YAML. If
-no GCP Application Default Credentials are available, they fall back to
-**contract-only mode** automatically, and no BigQuery connection is made.
+`gen`, `run`, and `check` introspect BigQuery at generation time to validate
+column references and populate the raw schema YAML, but only when the
+contract's selected server uses the BigQuery dialect, Application Default
+Credentials exist, and `--from-contract` is absent. Otherwise they use
+**contract-only introspection** and no BigQuery connection is made. A DuckDB
+or local contract always uses it, with no "No GCP credentials" notice.
 
 Force it with `--from-contract`:
 
@@ -320,10 +331,9 @@ modelgen check --from-contract
 | New source column notices | Yes | Not reported (source not queried) |
 | BQ credentials required | Yes | No |
 
-Use the same mode that produced the committed files, or `check` will see
-a different raw file. A DuckDB contract on a machine that has GCP
-credentials still calls BigQuery unless you pass `--from-contract`.
-`modelgen new` is the one command that always needs credentials.
+Use the same introspection that produced the committed files, or `check`
+will see a different raw file. `modelgen new` stays BigQuery-only and always
+needs credentials.
 
 ---
 
@@ -372,12 +382,14 @@ regeneration in each upgrade PR:
 
 ```bash
 modelgen run
-modelgen schema contracts/bus-marts.odcs.yaml -o models/marts
-modelgen sources contracts/extract.odcs.yaml -o models/staging
 modelgen check --diff
 ```
 
-`run` does not cover the schema and sources layers. Output generated from an
+With `schema_contracts`/`schema_output` and `sources_contracts`/`sources_output`
+set in `.modelgen.yml`, `run` regenerates the schema and sources layers too.
+Without those keys, regenerate them per contract with `modelgen schema
+contracts/bus-marts.odcs.yaml -o models/marts` and `modelgen sources
+contracts/extract.odcs.yaml -o models/staging` before `check`. Output generated from an
 uninstalled source tree carries `modelgen 0.0.0` and will drift against a
 released install; do not commit it. Generated quality tests call
 `dbt_expectations.*` macros, so the consuming project needs that package

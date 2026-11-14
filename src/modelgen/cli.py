@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
@@ -22,6 +23,9 @@ from modelgen.introspect import IntrospectionError
 from modelgen.lint import Finding, lint_contract
 from modelgen.lint import errors as lint_errors
 from modelgen.lint import warnings as lint_warnings
+
+if TYPE_CHECKING:
+    from modelgen.config import ModelgenConfig
 
 app = typer.Typer(
     name="modelgen",
@@ -245,31 +249,23 @@ def gen(
         )
         raise typer.Exit(1)
 
-    from modelgen.introspect import (
-        BigQueryIntrospector,
-        ContractIntrospector,
-        has_default_credentials,
-    )
+    from modelgen.introspect import IntrospectorChooser
 
-    use_contract = from_contract or not has_default_credentials()
-    if use_contract and not from_contract:
-        console.print(
-            "[yellow]No GCP credentials found."
-            " Generating from contract only.[/yellow]"
-        )
-    mode_subtitle = (
-        "contract-only mode" if use_contract else "introspecting BigQuery…"
+    chooser = IntrospectorChooser(
+        from_contract,
+        "[yellow]No GCP credentials found."
+        " Generating from contract only.[/yellow]",
+        console.print,
     )
-    shared_introspector = None if use_contract else BigQueryIntrospector()
+    mode_subtitle = (
+        "introspecting BigQuery…"
+        if any(chooser.queries_bigquery(e) for e in events)
+        else "contract-only introspection"
+    )
 
     results: list[tuple[EventContract, GenerationResult]] = []
     for event in events:
-        introspector = (
-            ContractIntrospector(event)
-            if use_contract
-            else shared_introspector
-        )
-        assert introspector is not None
+        introspector = chooser.for_event(event)
 
         target_dataset = (
             event.raw.dataset if layer == Layer.RAW else event.staging.dataset
@@ -359,6 +355,63 @@ def _dest(output: Path, filename: str, tests_output: Path | None) -> Path:
     if tests_output is not None and parts[0] == "tests":
         return tests_output.joinpath(*parts[1:])
     return output / filename
+
+
+def _require_patterns(cfg: ModelgenConfig) -> None:
+    """Exit 1 when a schema or sources contracts pattern matches nothing."""
+    for key, pattern, files in (
+        (
+            "schema_contracts",
+            cfg.schema_contracts,
+            cfg.schema_contract_files(),
+        ),
+        (
+            "sources_contracts",
+            cfg.sources_contracts,
+            cfg.sources_contract_files(),
+        ),
+    ):
+        if pattern and not files:
+            console.print(
+                f"[red]Error:[/red] {key} pattern"
+                f" [dim]{pattern!r}[/dim] matched nothing in {cfg.root}"
+            )
+            raise typer.Exit(1)
+
+
+def _produced_files(
+    cfg: ModelgenConfig, server: str | None, unmapped: list[str]
+):
+    """Yield (contract, mode, destination, content).
+
+    On a contract error the destination is None and content is the error.
+
+    Covers the produced (`schema`) and extract (`sources`) modes, for the
+    contracts whose `*_output` key is set. Shared by `run` and `check`.
+    """
+    from modelgen.schema_mode import render_schema
+    from modelgen.sources_mode import render_sources
+
+    for files, out_dir, mode in (
+        (cfg.schema_contract_files(), cfg.schema_output, "schema"),
+        (cfg.sources_contract_files(), cfg.sources_output, "sources"),
+    ):
+        if not files or out_dir is None:
+            continue
+        for contract_path in files:
+            try:
+                if mode == "schema":
+                    rendered = render_schema(
+                        contract_path, server=server, unmapped=unmapped
+                    )
+                else:
+                    rendered = render_sources(contract_path, unmapped=unmapped)
+            except ContractError as e:
+                yield contract_path, mode, None, str(e)
+                continue
+            for filename, content in rendered.items():
+                dest = _dest(out_dir, filename, cfg.tests_output)
+                yield contract_path, mode, dest, content
 
 
 def _write_schema(
@@ -603,16 +656,17 @@ def run(
     server: str | None = _SERVER_OPTION,
 ):
     """
-    Find all contracts and regenerate every layer.
+    Find all contracts and regenerate everything .modelgen.yml names.
 
-    Reads .modelgen.yml (or opinionated defaults) to locate contracts,
-    introspects each contract's server (BigQuery or DuckDB), and writes both
-    layers. Reports each failure by contract name and layer before exiting
-    non-zero.
+    Reads .modelgen.yml (or opinionated defaults) to locate contracts.
+    Event contracts yield the raw and staging layers. Produced and extract
+    contracts (schema_contracts, sources_contracts) yield their yml and
+    tests when the matching *_output key is set. BigQuery is queried only
+    for BigQuery contracts. Reports each failure by contract name and
+    layer before exiting non-zero.
 
     \b
-    Reads .modelgen.yml (or uses opinionated defaults) to find contracts
-    and write to:
+    Default outputs:
       models/raw/     -- raw (Origin Data Product) layer
       models/staging/ -- staging layer (skipped if no columns declared)
 
@@ -625,11 +679,7 @@ def run(
     _configure_logging(verbose)
 
     from modelgen.config import ConfigError, ModelgenConfig
-    from modelgen.introspect import (
-        BigQueryIntrospector,
-        ContractIntrospector,
-        has_default_credentials,
-    )
+    from modelgen.introspect import IntrospectorChooser
 
     try:
         if config is not None:
@@ -641,7 +691,12 @@ def run(
         raise typer.Exit(1)
 
     contract_files = cfg.contract_files()
-    if not contract_files:
+    _require_patterns(cfg)
+    if (
+        not contract_files
+        and not cfg.schema_contract_files()
+        and not cfg.sources_contract_files()
+    ):
         console.print(
             f"[yellow]No contracts found.[/yellow] "
             f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
@@ -649,16 +704,13 @@ def run(
         )
         raise typer.Exit(0)
 
-    use_contract_introspection = from_contract or not has_default_credentials()
-    if use_contract_introspection and not from_contract:
-        console.print(
-            "[yellow]No GCP credentials found."
-            " Generating from contracts only.[/yellow]"
-        )
-
-    bq_subtitle = (
-        "contract-only mode" if use_contract_introspection else "buckle up"
+    chooser = IntrospectorChooser(
+        from_contract,
+        "[yellow]No GCP credentials found."
+        " Generating from contracts only.[/yellow]",
+        console.print,
     )
+
     console.print(
         Panel(
             f"[bold]Contracts:[/bold]       {len(contract_files)}\n"
@@ -666,15 +718,14 @@ def run(
             f"[bold]Raw output:[/bold]      {cfg.raw_output}\n"
             f"[bold]Staging output:[/bold]  {cfg.staging_output}",
             title="[bold green]👻 modelgen run[/bold green]",
-            subtitle=f"[dim]{bq_subtitle}[/dim]",
+            subtitle=(
+                "[dim]contract-only introspection[/dim]"
+                if from_contract
+                else None
+            ),
             expand=False,
         )
     )
-
-    if not use_contract_introspection:
-        shared_introspector = BigQueryIntrospector()
-    else:
-        shared_introspector = None
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Contract")
@@ -710,12 +761,7 @@ def run(
                 )
                 continue
 
-            introspector = (
-                ContractIntrospector(event)
-                if use_contract_introspection
-                else shared_introspector
-            )
-            assert introspector is not None
+            introspector = chooser.for_event(event)
 
             # Raw layer
             try:
@@ -764,7 +810,28 @@ def run(
             except (GenerationError, IntrospectionError) as e:
                 errors.append((label, "staging", str(e)))
 
+    unmapped: list[str] = []
+    for contract_path, mode, dest, content in _produced_files(
+        cfg, server, unmapped
+    ):
+        if dest is None:
+            errors.append((contract_path.name, "parse", content))
+            continue
+        if not dry_run:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content)
+        status = (
+            "[yellow]dry-run[/yellow]" if dry_run else "[green]written[/green]"
+        )
+        table.add_row(contract_path.name, mode, dest.name, status)
+
     console.print(table)
+    if unmapped:
+        typer.echo(
+            f"modelgen: {len(unmapped)} quality rule(s) not mapped:"
+            f" {', '.join(unmapped)}",
+            err=True,
+        )
 
     for event_name, cols in new_cols_notices:
         console.print(
@@ -831,11 +898,7 @@ def check(
     _configure_logging(verbose)
 
     from modelgen.config import ConfigError, ModelgenConfig
-    from modelgen.introspect import (
-        BigQueryIntrospector,
-        ContractIntrospector,
-        has_default_credentials,
-    )
+    from modelgen.introspect import IntrospectorChooser
 
     try:
         if config is not None:
@@ -849,16 +912,7 @@ def check(
     contract_files = cfg.contract_files()
     schema_files = cfg.schema_contract_files()
     sources_files = cfg.sources_contract_files()
-    for key, pattern, files in (
-        ("schema_contracts", cfg.schema_contracts, schema_files),
-        ("sources_contracts", cfg.sources_contracts, sources_files),
-    ):
-        if pattern and not files:
-            console.print(
-                f"[red]Error:[/red] {key} pattern"
-                f" [dim]{pattern!r}[/dim] matched nothing in {cfg.root}"
-            )
-            raise typer.Exit(1)
+    _require_patterns(cfg)
     if not contract_files and not schema_files and not sources_files:
         console.print(
             f"[yellow]No contracts found.[/yellow] "
@@ -867,15 +921,11 @@ def check(
         )
         raise typer.Exit(0)
 
-    use_contract_introspection = from_contract or not has_default_credentials()
-    if use_contract_introspection and not from_contract:
-        console.print(
-            "[yellow]No GCP credentials found."
-            " Checking against contracts only.[/yellow]"
-        )
-
-    shared_introspector = (
-        None if use_contract_introspection else BigQueryIntrospector()
+    chooser = IntrospectorChooser(
+        from_contract,
+        "[yellow]No GCP credentials found."
+        " Checking against contracts only.[/yellow]",
+        console.print,
     )
 
     table = Table(show_header=True, header_style="bold cyan")
@@ -888,42 +938,22 @@ def check(
     drifted: list[tuple[Path, str, str]] = []  # path, on_disk, expected
     in_sync = 0
 
-    from modelgen.schema_mode import render_schema
-    from modelgen.sources_mode import render_sources
-
-    produced = (
-        (schema_files, cfg.schema_output, "schema", None),
-        (
-            cfg.sources_contract_files(),
-            cfg.sources_output,
-            "sources",
-            render_sources,
-        ),
-    )
-    for files_, out_dir, layer_name, renderer in produced:
-        if not files_ or out_dir is None:
+    for contract_path, mode, dest, expected in _produced_files(
+        cfg, server, []
+    ):
+        if dest is None:
+            errors.append((contract_path.name, "parse", expected))
             continue
-        for contract_path in files_:
-            try:
-                if renderer is None:
-                    files = render_schema(contract_path, server=server)
-                else:
-                    files = renderer(contract_path)
-            except ContractError as e:
-                errors.append((contract_path.name, "parse", str(e)))
-                continue
-            for filename, expected in files.items():
-                dest = _dest(out_dir, filename, cfg.tests_output)
-                if not dest.exists():
-                    drifted.append((dest, "", expected))
-                    status = "[red]missing[/red]"
-                elif dest.read_text() != expected:
-                    drifted.append((dest, dest.read_text(), expected))
-                    status = "[red]drift[/red]"
-                else:
-                    in_sync += 1
-                    status = "[green]in sync[/green]"
-                table.add_row(contract_path.name, layer_name, filename, status)
+        if not dest.exists():
+            drifted.append((dest, "", expected))
+            status = "[red]missing[/red]"
+        elif dest.read_text() != expected:
+            drifted.append((dest, dest.read_text(), expected))
+            status = "[red]drift[/red]"
+        else:
+            in_sync += 1
+            status = "[green]in sync[/green]"
+        table.add_row(contract_path.name, mode, dest.name, status)
 
     for contract_path in contract_files:
         try:
@@ -950,12 +980,7 @@ def check(
                 )
                 continue
 
-            introspector = (
-                ContractIntrospector(event)
-                if use_contract_introspection
-                else shared_introspector
-            )
-            assert introspector is not None
+            introspector = chooser.for_event(event)
 
             layers: list[tuple[Layer, Path]] = [(Layer.RAW, cfg.raw_output)]
             if event.staging.columns:
