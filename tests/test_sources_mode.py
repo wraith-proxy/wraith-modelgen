@@ -443,6 +443,12 @@ def test_check_flags_missing_file_in_tests_output(tmp_path):
     assert "missing" in res.stdout.lower()
 
 
-def test_schema_command_accepts_tests_output(tmp_path):
-    res = _cli("schema", "--help", cwd=tmp_path)
-    assert "--tests-output" in res.stdout
+def test_schema_command_writes_singular_tests_under_tests_output(tmp_path):
+    marts = HERE / "fixtures" / "real_contracts" / "bus-marts.odcs.yaml"
+    out, tests = tmp_path / "models", tmp_path / "tests"
+    _cli(
+        "schema", str(marts), "-o", str(out),
+        "--tests-output", str(tests), cwd=tmp_path,
+    )  # fmt: skip
+    assert list((tests / "generated").glob("*.sql"))
+    assert not (out / "tests").exists()
