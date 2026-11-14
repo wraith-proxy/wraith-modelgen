@@ -27,7 +27,7 @@ BigQuery introspection needs Application Default Credentials:
 gcloud auth application-default login
 ```
 
-Everything except `new` also runs without them. `--from-contract` generates from the contract's declared columns alone, and `gen`, `run` and `check` fall back to it automatically when no credentials are found. That's how CI runs it. DuckDB contracts have the same escape hatch, but read the gotcha in the Targets and dialects section first.
+Everything except `new` also runs without them. `gen`, `run` and `check` query BigQuery only when the contract's selected server uses the BigQuery dialect, Application Default Credentials exist, and `--from-contract` is absent. Otherwise they use contract-only introspection: columns come from the contract's declarations and no BigQuery connection is made. A DuckDB or local contract always uses it, with no credentials notice. That's how CI runs it. `new` stays BigQuery-only.
 
 ---
 
@@ -37,13 +37,13 @@ Everything except `new` also runs without them. `--from-contract` generates from
 modelgen init                                              # scaffold .modelgen.yml + dirs (once)
 modelgen new my-project.landing.user_signups               # draft a contract from a live table
 modelgen validate contracts/user_signups.yml               # offline semantic lint, all findings at once
-modelgen run                                               # regenerate raw and staging for every contract
+modelgen run                                               # regenerate every layer and mode the config names
 modelgen schema contracts/marts.odcs.yaml -o models/marts  # models yml for tables this project produces
 modelgen sources contracts/extract.odcs.yaml -o models/staging  # sources yml for tables this project reads
 modelgen check --diff                                      # CI: fail if committed models drifted
 ```
 
-`run` does not write the schema or sources yml. Generate those with `schema` and `sources`, commit the output, and let `check` gate it.
+`run` renders all three modes. With `schema_contracts` and `schema_output`, and/or `sources_contracts` and `sources_output`, set in `.modelgen.yml`, it also writes the produced and extract yml and their singular tests (honouring `tests_output`), so `run` then `check` is a clean round trip. The separate `schema` and `sources` commands stay valid for one-off use and for `--strict` CI gating.
 
 Single layers when you need them. `--raw` and `--staging` are mutually exclusive:
 
@@ -58,8 +58,8 @@ modelgen gen contract.yml --raw --dry-run  # preview without writing
 | `init` | Scaffold project layout: `.modelgen.yml`, `contracts/`, `models/` |
 | `new` | Bootstrap a draft contract from a live BigQuery table, keys guessed and marked TODO |
 | `validate` | Offline structural + semantic lint over every schema object; `--strict` promotes warnings to failures. A rule that's wrong for one contract can be exempted with `modelgenExempt`; a reason is mandatory, and exempted findings still print |
-| `gen` | Generate one layer (`--raw`, `--staging`, or `--layer schema` / `--layer sources`) from one contract |
-| `run` | Regenerate raw and staging for every contract under `.modelgen.yml` |
+| `gen` | Generate one layer (`--raw` or `--staging`), or one mode's yml (`--layer schema` / `--layer sources`), from one contract |
+| `run` | Regenerate raw and staging for every event contract under `.modelgen.yml`, plus the produced and extract yml and tests when their config keys are set |
 | `schema` | Write `_<contract-name>__models.yml` for tables the project produces |
 | `sources` | Write `_<contract-name>__sources.yml` for tables the project reads (extract contracts) |
 | `check` | Render in memory, diff against disk, exit non-zero on drift. Writes nothing. |
@@ -87,7 +87,7 @@ modelgen check --help
 
 ### `gen`
 
-Generates one layer from one contract. Specify exactly one of `--raw`, `--staging` or `--layer`.
+Generates one layer, or one mode's yml, from one contract. Specify exactly one of `--raw`, `--staging` or `--layer`.
 
 ```bash
 modelgen gen contracts/bus-positions.odcs.yaml --staging -o models/staging
@@ -127,6 +127,26 @@ Gotchas:
 
 - `gen` has no `--strict`. Use `modelgen schema --strict` or `modelgen sources --strict` for that.
 - `--from-contract` does nothing under `--layer`.
+
+### `run`
+
+Reads `.modelgen.yml` and regenerates every contract it names: raw and staging layers for event contracts, plus the produced and extract yml and their singular tests when the schema and sources keys are set (see Configuration).
+
+```bash
+modelgen run
+```
+
+Flags: `-c, --config FILE`, `-s, --server ID`, `--dry-run`, `--from-contract`, `-v, --verbose`. There is no `--strict`.
+
+Exit codes for `run`:
+
+- `0`: success. Unmapped quality rules print on stderr as `modelgen: N quality rule(s) not mapped: <model>.<rule>` and do not change the exit code.
+- `1`: a contract fails to parse, lint or introspect; `.modelgen.yml` is malformed; a `schema_contracts` or `sources_contracts` pattern matches no files.
+
+Gotchas:
+
+- A `*_contracts` key without its `*_output` key is skipped silently.
+- To fail CI on unmapped quality rules, use `modelgen schema --strict` or `modelgen sources --strict`.
 
 ### `schema`
 
@@ -192,7 +212,7 @@ Drifted repo: a `--- <path>` header and a unified diff for each drifted file, th
 | `-c, --config FILE` | Path to `.modelgen.yml`. Default: discovered upward from cwd. |
 | `--diff` | Print a unified diff for every drifted file. |
 | `--from-contract` | Skip BigQuery introspection for all contracts. |
-| `-s, --server ID` | Pick the server by its `server:` id. Applies to schema and event contracts. Sources contracts ignore it. |
+| `-s, --server ID` | Pick the server by its `server:` id. Applies to schema and event contracts. Extract contracts ignore it. |
 | `-v, --verbose` | Debug logging. |
 
 Exit codes for `check`:
@@ -200,7 +220,7 @@ Exit codes for `check`:
 - `0`: everything is in sync, or no contracts matched the `contracts` glob and no `schema_contracts` or `sources_contracts` pattern is set (`No contracts found.`).
 - `1`: drift or missing files; a contract fails to parse, lint or introspect; `.modelgen.yml` is malformed or not a YAML mapping; a `schema_contracts` or `sources_contracts` pattern matches no files. The last case fails even when other contracts exist.
 
-Gotcha: `schema_contracts` and `sources_contracts` are only checked when `schema_output` and `sources_output` are set. Without them, matched contracts are skipped by the drift comparison and do not fail the run.
+Gotcha: `schema_contracts` and `sources_contracts` are only checked when their `schema_output` and `sources_output` keys are set. Without them, matched contracts are skipped by the drift comparison and do not fail the run.
 
 ### Python API
 
@@ -222,10 +242,11 @@ Put the file at the repo root. Every path in it is relative to the directory tha
 | `contracts` | `contracts/*.yml` | `run`, `check` | Glob of event contracts. Each one yields a raw model and, when it declares staging columns, a staging model. |
 | `raw_output` | `models/raw` | `run`, `check` | Directory for raw models. |
 | `staging_output` | `models/staging` | `run`, `check` | Directory for staging models. |
-| `schema_contracts` | unset | `check` | Glob of contracts for tables this project produces. Rendered as `modelgen schema` would. |
-| `schema_output` | unset | `check` | Directory the schema yml is compared against. |
-| `sources_contracts` | unset | `check` | Glob of extract contracts for tables this project reads. Rendered as `modelgen sources` would. |
-| `sources_output` | unset | `check` | Directory the sources yml is compared against. |
+| `schema_contracts` | unset | `run`, `check` | Glob of produced contracts for tables this project builds. Rendered as `modelgen schema` would. |
+| `schema_output` | unset | `run`, `check` | Directory `run` writes the produced yml to and `check` compares against. |
+| `sources_contracts` | unset | `run`, `check` | Glob of extract contracts for tables this project reads. Rendered as `modelgen sources` would. |
+| `sources_output` | unset | `run`, `check` | Directory `run` writes the extract yml to and `check` compares against. |
+| `tests_output` | unset | `run`, `check` | Directory that replaces the leading `tests` of generated singular-test paths, so `tests/generated/x.sql` is written and compared at `<tests_output>/generated/x.sql` instead of under `schema_output`/`sources_output`. Pair it with `--tests-output` on `schema`/`sources`. Use it when the yml lives under `models/` but dbt must find the tests in its `tests/` directory. |
 
 Complete example:
 
@@ -244,11 +265,12 @@ sources_output: models/staging
 
 Gotchas, all from the code:
 
-- `run` never writes schema or sources yml. Generate them with `modelgen schema` and `modelgen sources`, commit the output, and let `check` gate it.
-- `schema_contracts` or `sources_contracts` set to a glob that matches nothing makes `check` exit 1 and name the key.
-- A `schema_contracts` or `sources_contracts` glob without its `*_output` key is not checked, and `check` does not say so. Set both or neither.
+- `run` writes the produced and extract yml and their singular tests when the `*_contracts` and `*_output` keys are set, so `run` then `check` is a clean round trip.
+- `schema_contracts` or `sources_contracts` set to a glob that matches nothing makes `run` and `check` exit 1 and name the key.
+- A `schema_contracts` or `sources_contracts` glob without its `*_output` key is skipped silently by `run` and `check`. Set both or neither.
+- `run` has no `--strict`. It prints unmapped quality rules on stderr and exits 0. Use `schema --strict` or `sources --strict` as a CI gate.
 - The default `contracts` glob is `*.yml`. ODCS files named `*.odcs.yaml` need their own glob.
-- Keep extract (sources) contracts out of the `contracts` glob. Event contracts require `modelgenLoadedAtField` on each schema object. `run` and `check` report its absence as a `parse` error. Sources contracts do not carry that property.
+- Keep extract contracts out of the `contracts` glob. Event contracts require `modelgenLoadedAtField` on each schema object. `run` and `check` report its absence as a `parse` error. Extract contracts do not carry that property.
 - `gen`, `schema`, `sources` and `validate` never read this file. Pass their paths and flags explicitly.
 
 ---
@@ -375,7 +397,7 @@ DuckDB limits, enforced by lint or generation:
 - Known ID with an unsupported type: error that lists the supported types.
 - No `--server`: the first `type: bigquery` server wins, even when it comes after a DuckDB one. If there is none, the first server whose type a dialect supports is used, in contract order. If there is none at all, the error lists the supported types: `bigquery, duckdb, local`.
 
-Gotcha: when Application Default Credentials are found, `gen`, `run` and `check` build a BigQuery introspector whatever the dialect. `gen` asks it for the source columns before the dialect is applied (`render_raw` and `render_staging` in `src/modelgen/generator.py`). A DuckDB contract on a machine with GCP credentials therefore calls BigQuery unless you pass `--from-contract`. Whether that call succeeds depends on the BigQuery table and your access.
+Introspection follows the dialect. `gen`, `run` and `check` query BigQuery only when the contract's selected server uses the BigQuery dialect, Application Default Credentials exist, and `--from-contract` is absent. A DuckDB or local contract always uses contract-only introspection, even on a machine with GCP credentials, and prints no "No GCP credentials" notice. `new` stays BigQuery-only.
 
 ```bash
 modelgen gen contracts/events/build_summary.yml --staging --from-contract -o models/staging
@@ -387,13 +409,14 @@ On success, `gen` prints a File and Status table of written files. The status co
 
 ## 📦 Sources layer
 
-`modelgen sources` renders one `_<contract-name>__sources.yml` per extract contract. The filename uses the contract's `name`, not `dbtSourceName`. The file holds one `sources:` entry with `loaded_at_field`, `freshness`, a `tables:` list, and a column-set test (`dbt_expectations.expect_table_columns_to_match_set`). The consuming dbt project therefore needs the `dbt_expectations` package. Quality rules that map to singular tests go under `tests/generated/`.
+`modelgen sources` renders one `_<contract-name>__sources.yml` per extract contract. The filename uses the contract's `name`, not `dbtSourceName`. The file holds one `sources:` entry with `loaded_at_field`, `freshness`, a `tables:` list, and a column-set test (`dbt_expectations.expect_table_columns_to_match_set`). The consuming dbt project therefore needs the `dbt_expectations` package. Quality rules that map to singular tests go under `tests/generated/` of the output directory, or of `tests_output` when that is set (see Configuration).
 
 Read the customProperties below from the contract's top level unless the table says otherwise.
 
 | Property | Level | Effect |
 |---|---|---|
 | `dbtSourceName` | contract | Name of the dbt source. Default: the contract `name`. Must be a single value, not a list. |
+| `dbtColumnSetTest` | contract | Name of the column-set test, replacing `dbt_expectations.expect_table_columns_to_match_set`. For projects whose sources are bare table functions (for example DuckDB `read_parquet(...)`), where the dbt_expectations test errors. The macro must take the same `column_list` argument. Single value. |
 | `loadedAtField` | contract | Written as `loaded_at_field`. Optional. Passed through as written. |
 | `freshnessWarnAfter` | contract | `freshness.warn_after`. Format `N minutes`, `N hours` or `N days`. |
 | `freshnessErrorAfter` | contract | `freshness.error_after`. Same format. |
@@ -598,7 +621,7 @@ Read this before you bump the modelgen pin. The first `modelgen check` after the
 Drift detected: <n> file(s) out of sync, <m> error(s). Run modelgen run and commit the result.
 ```
 
-That advice is only partly right. `modelgen run` covers the raw and staging layers. It does not regenerate the schema or sources layers.
+That advice is right once the schema and sources keys are set in `.modelgen.yml`: `modelgen run` regenerates the raw and staging layers and, with `schema_contracts`/`schema_output` and `sources_contracts`/`sources_output` set, the produced and extract yml and their singular tests too.
 
 ### Why every file drifts
 
@@ -621,9 +644,9 @@ Step 1: raw and staging.
 modelgen run
 ```
 
-`run` introspects BigQuery when Application Default Credentials resolve. Otherwise it builds columns from the contract's staging declarations. Use the same mode that produced the committed files. The raw layer differs between modes because BigQuery returns every source column and the contract declares only some of them. Regenerating in the other mode commits a different raw file. Force contract-only mode with `modelgen run --from-contract`.
+`run` queries BigQuery only when the contract's selected server uses the BigQuery dialect and Application Default Credentials resolve. Otherwise it uses contract-only introspection and builds columns from the contract's staging declarations. Use the same introspection that produced the committed files. The raw layer differs between the two because BigQuery returns every source column and the contract declares only some of them. Regenerating with the other one commits a different raw file. Force contract-only introspection with `modelgen run --from-contract`.
 
-Step 2: schema and sources. `run` does not touch these layers. Regenerate them per contract:
+Step 2: schema and sources. With the `schema_*` and `sources_*` keys set, step 1 already wrote them and you can skip this step. Without the keys, regenerate them per contract:
 
 ```bash
 modelgen schema contracts/bus-marts.odcs.yaml -o models/marts
@@ -632,7 +655,7 @@ modelgen sources contracts/extract.odcs.yaml -o models/staging
 
 Equivalent forms: `modelgen gen <contract> --layer schema -o <dir>` and `modelgen gen <contract> --layer sources -o <dir>`.
 
-Set `schema_contracts` and `schema_output` together, and `sources_contracts` and `sources_output` together. See the Configuration section.
+Set `schema_contracts` and `schema_output` together, and `sources_contracts` and `sources_output` together, so `run` writes them. See the Configuration section.
 
 Step 3: verify.
 
@@ -645,7 +668,7 @@ Clean output ends with `Everything in sync. <n> file(s) match their contracts.` 
 ### Upgrade notes
 
 - Output is byte-identical for the same inputs. No timestamps, no paths. That is tested for `gen --raw` and `gen --staging` with `--from-contract`. The BigQuery path is not covered by that test.
-- ODCS quality rules are mapped per layer. `schema` and `sources` (and `gen --layer schema|sources`) map them through `src/modelgen/quality.py`: `invalidValues` with `arguments.validValues` and `mustBe: 0` becomes `accepted_values`, zero `nullValues` and `duplicateValues` become `not_null` and `unique`, and `rowCount` with a bound becomes a row-count test. Other thresholds and `type: sql` rules become singular tests under `tests/generated/`. Anything unmapped is reported, never dropped. `gen --staging` maps only property-level `rule: validValues` to `accepted_values` (`src/modelgen/contract.py`) and reports nothing it skips. `gen --raw` emits no quality tests. Review the generated tests after regeneration.
+- ODCS quality rules are mapped per mode. `schema` and `sources` (and `gen --layer schema|sources`) map them through `src/modelgen/quality.py`: `invalidValues` with `arguments.validValues` and `mustBe: 0` becomes `accepted_values`, zero `nullValues` and `duplicateValues` become `not_null` and `unique`, and `rowCount` with a bound becomes a row-count test. Other thresholds and `type: sql` rules become singular tests under `tests/generated/`. Anything unmapped is reported, never dropped. `gen --staging` maps only property-level `rule: validValues` to `accepted_values` (`src/modelgen/contract.py`) and reports nothing it skips. `gen --raw` emits no quality tests. Review the generated tests after regeneration.
 - `modelgen check` also checks the schema and sources layers when their config keys are set.
 - Several schema objects per contract: `gen` writes one model per object, in contract order. Check model names if a contract has several objects.
 - Pin `--server` if a contract lists several servers. Without it, the first `type: bigquery` server wins, then the first server of a supported type.
@@ -655,7 +678,7 @@ Clean output ends with `Everything in sync. <n> file(s) match their contracts.` 
 
 - The version falls back to `0.0.0` when the package is not installed.
 - Generated quality tests call `dbt_expectations.*` macros. The consuming dbt project must install the dbt-expectations package. modelgen does not check for it.
-- `modelgen run` does not regenerate the schema or sources layers.
+- `modelgen run` skips a `schema_contracts` or `sources_contracts` key silently when its `*_output` key is missing.
 
 ---
 

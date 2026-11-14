@@ -7,11 +7,16 @@ repos:
     hooks:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
+        # Vendored third-party file: never rewrite it.
+        exclude: ^docs/javascripts/vendor/
       - id: end-of-file-fixer
+        exclude: ^docs/javascripts/vendor/
       - id: check-yaml
         args: ["--unsafe"]
       - id: check-toml
       - id: check-added-large-files
+        # Vendored Mermaid for the docs site (see docs/javascripts/vendor/SOURCE.txt).
+        exclude: ^docs/javascripts/vendor/
       - id: check-case-conflict
 
   - repo: https://github.com/astral-sh/ruff-pre-commit

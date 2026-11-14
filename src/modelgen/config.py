@@ -32,6 +32,7 @@ class ModelgenConfig:
     schema_output: Path | None = None
     sources_contracts: str | None = None
     sources_output: Path | None = None
+    tests_output: Path | None = None
 
     def contract_files(self) -> list[Path]:
         return sorted(self.root.glob(self.contracts_glob))
@@ -67,6 +68,9 @@ class ModelgenConfig:
                 root / raw["sources_output"]
                 if raw.get("sources_output")
                 else None
+            ),
+            tests_output=(
+                root / raw["tests_output"] if raw.get("tests_output") else None
             ),
         )
 

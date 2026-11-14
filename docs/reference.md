@@ -2,7 +2,7 @@
 
 ## Contract structure
 
-A contract is an [Open Data Contract Standard (ODCS)](https://github.com/bitol-io/open-data-contract-standard) YAML document (v3.0.2, v3.1.0 or v3.2.0), validated against the bundled ODCS JSON schema for its `apiVersion`. It describes exactly **one** table: a `server` (a BigQuery project and dataset, or a DuckDB or `local` source), one `schema` object (the source table), and its `properties` (the staging columns). modelgen's BigQuery/dbt specifics live in `customProperties`.
+A contract is an [Open Data Contract Standard (ODCS)](https://github.com/bitol-io/open-data-contract-standard) YAML document (v3.0.2, v3.1.0 or v3.2.0), validated against the bundled ODCS JSON schema for its `apiVersion`. It lists one or more `servers` (BigQuery, DuckDB or `local`, see [Targets and dialects](#targets-and-dialects)) and one or more `schema` objects (the tables). `gen` writes one model per schema object, in contract order. Each object's `properties` are its staging columns. modelgen's BigQuery/dbt specifics live in `customProperties`.
 
 ```mermaid
 classDiagram
@@ -15,7 +15,7 @@ classDiagram
         name: string
     }
     class Server {
-        type: "bigquery"
+        type: "bigquery | duckdb | local"
         project: string
         dataset: string
     }
@@ -43,7 +43,7 @@ classDiagram
     }
 
     DataContract "1" --> "1..*" Server : servers
-    DataContract "1" --> "1" SchemaObject : schema
+    DataContract "1" --> "1..*" SchemaObject : schema
     SchemaObject "1" --> "1..*" Property : properties
     SchemaObject --> modelgenCustomProps : customProperties
 ```
@@ -62,18 +62,19 @@ classDiagram
 | `id` | string | yes | Unique contract id (e.g. a UUID) |
 | `status` | string | yes | e.g. `active`, `draft` |
 | `name` | string | no | Data product name |
-| `servers` | list | yes | Must include one `type: bigquery` server |
-| `schema` | list | yes | Exactly one schema object (the source table) |
+| `servers` | list | yes | At least one server whose `type` has a dialect: `bigquery`, `duckdb` or `local` |
+| `schema` | list | yes | One or more schema objects (tables). Several objects yield several models; narrow with `--table` |
 
-### `servers[]` (the `bigquery` entry)
+### `servers[]`
 
 | Field | Required | Description |
 |---|---|---|
-| `type` | yes | Must be `bigquery` |
-| `project` | yes | GCP project ID |
-| `dataset` | yes | BigQuery dataset |
+| `server` | yes | Server id, matched by `--server` |
+| `type` | yes | `bigquery`, `duckdb` or `local`. Any other type has no dialect and is skipped |
 
-### `schema[0]` (the source table)
+For `bigquery`, add `project` (GCP project ID) and `dataset`. Keys for the other types are in the next section.
+
+### `schema[]` (a source table)
 
 | Field | Required | Description |
 |---|---|---|
@@ -84,7 +85,7 @@ classDiagram
 | `properties` | yes | Staging columns (see below) |
 | `customProperties` | yes | modelgen dbt/layer config (see below) |
 
-### `schema[0].properties[]` (staging columns)
+### `schema[].properties[]` (staging columns)
 
 | Field | Required | Description |
 |---|---|---|
@@ -95,8 +96,8 @@ classDiagram
 | `primaryKey` / `primaryKeyPosition` | no | Marks a `unique_key` column (uses source names, ordered by position) |
 | `required` | no | → `not_null` test |
 | `unique` | no | → `unique` test |
-| `quality` | no | `rule: validValues` + `validValues: [...]` → `accepted_values` test |
-| `classification` | no | `pii` or `psi` → the column is **encrypted** into staging and emitted as `BYTES`. See [Keystore & Erasure](bigquery/keystore.md) |
+| `quality` | no | `rule: validValues` + `validValues: [...]` → `accepted_values` test in the staging yml only. See [Quality-rule mapping](#quality-rule-mapping) |
+| `classification` | no | `pii` or `psi` → the column is **encrypted** into staging and emitted as `BYTES`. BigQuery only: DuckDB generation refuses classified columns. See [Keystore & Erasure](bigquery/keystore.md) |
 | `customProperties` | no | `modelgenExempt`, lint exemptions scoped to this column only. See [Lint Rules](linting.md#exemptions) |
 
 Classification is ODCS's own field, and it drives encryption at generation
@@ -110,7 +111,7 @@ column with an encrypted sibling; here the column **is** the ciphertext,
 because a plaintext copy is exactly the second copy a crypto-shred can never
 reach.
 
-### `schema[0].customProperties` (modelgen config)
+### `schema[].customProperties` (modelgen config)
 
 | `property` | Value | Description |
 |---|---|---|
@@ -135,7 +136,145 @@ raises the `missing-freshness` warning. See [Lint Rules](linting.md#source-fresh
 
 ---
 
+## Targets and dialects
+
+A contract picks its dialect from the `type` of each `servers[]` entry. The
+dialect decides which keys locate the source and how SQL is rendered.
+
+| `servers[].type` | Dialect | Where the source lives |
+|---|---|---|
+| `bigquery` | BigQuery | `project` and `dataset` keys on the server |
+| `duckdb` | DuckDB | First set of `database`, `path`, `location`, `server`. Schema is the `schema` key, default `main` |
+| `local` | DuckDB | Same keys as `duckdb`. With `format: parquet`, the location is a Parquet landing file that dbt-duckdb reads through the source's `external_location` meta |
+
+```yaml
+servers:
+  - server: prod
+    type: bigquery
+    project: my-gcp-project
+    dataset: landing
+  - server: build-warehouse
+    type: duckdb
+    database: ./dbt/build.duckdb
+    schema: main
+  - server: extract-local
+    type: local
+    format: parquet
+    path: dbt/data/bus_positions_*.parquet
+```
+
+DuckDB limits, enforced by lint or generation:
+
+- Models are views unless the contract says `materialization: table`. Staging
+  `incremental` passes lint but renders as a view.
+- No partitions or clustering. Declaring `partitionBy` or `clusterBy` is a lint
+  error. The derived `ds` partition of a snapshot is the one exception, and
+  DuckDB never adds a `ds` column.
+- No encryption. Lint reports classified columns as `dialect-unsupported-config`
+  and generation refuses them.
+
+### Choosing a server
+
+`--server ID` (`-s`) matches the `server:` value exactly. It works on `gen`,
+`schema`, `validate`, `run` and `check`. `sources` has no such flag, and
+`gen --layer sources` exits 2 when given one.
+
+- Unknown ID: error listing the server IDs in the contract.
+- Known ID with an unsupported type: error listing the supported types.
+- No `--server`: the first `type: bigquery` server wins, even after a DuckDB
+  one. Otherwise the first server of a supported type, in contract order.
+  Otherwise an error listing `bigquery, duckdb, local`.
+
+Introspection follows the dialect. `gen`, `run` and `check` query BigQuery only
+when the selected server uses the BigQuery dialect, Application Default
+Credentials exist, and `--from-contract` is absent. A DuckDB or local contract
+always uses contract-only introspection, with no "No GCP credentials" notice.
+`new` stays BigQuery-only.
+
+---
+
+## Sources layer
+
+`modelgen sources` renders one `_<contract-name>__sources.yml` per extract
+contract. The filename uses the contract's `name`, not `dbtSourceName`. The
+file holds one `sources:` entry with `loaded_at_field`, `freshness`, a
+`tables:` list and a column-set test (by default
+`dbt_expectations.expect_table_columns_to_match_set`, so the consuming project
+needs the `dbt_expectations` package unless `dbtColumnSetTest` replaces it).
+Quality rules that map to singular tests go under `tests/generated/` of the
+output directory, or of `tests_output` when set.
+
+| Property | Level | Effect |
+|---|---|---|
+| `dbtSourceName` | contract | Name of the dbt source. Default: the contract `name`. Single value |
+| `dbtColumnSetTest` | contract | Name of the column-set test, replacing the dbt_expectations one. For sources that are bare table functions (e.g. DuckDB `read_parquet(...)`), where that test errors. The macro must take the same `column_list` argument. Single value |
+| `loadedAtField` | contract | Written as `loaded_at_field`, passed through as written (include any quotes) |
+| `freshnessWarnAfter` | contract | `freshness.warn_after`. Format `N minutes`, `N hours` or `N days` |
+| `freshnessErrorAfter` | contract | `freshness.error_after`. Same format |
+| `externalLocation` | schema object | `meta.external_location` on that table. Wins over the contract-level value |
+| `externalLocation` | contract | Used for the table when the contract has exactly one object. With more objects it is a contract error, so set it per object |
+
+The freshness format is one whole number above zero, at least one space, then
+`minute(s)`, `hour(s)` or `day(s)`, any case. `2 days` is valid; `2days` and
+`0 days` are errors that name the property. A freshness block is written only
+when at least one bound is set.
+
+```yaml
+customProperties:
+  - property: dbtSourceName
+    value: bods
+  - property: dbtColumnSetTest
+    value: columns_match_set
+  - property: externalLocation
+    value: "read_parquet('data/bus_positions_*.parquet', union_by_name=true)"
+  - property: loadedAtField
+    value: '"timestamp"'
+  - property: freshnessWarnAfter
+    value: 2 days
+```
+
+```bash
+modelgen sources contracts/extract/bus-positions-extract.odcs.yaml -o models/staging
+# models/staging/_wraith_bus_extract_positions__sources.yml written
+```
+
+Keep extract contracts out of the `contracts` glob in `.modelgen.yml`: event
+contracts require `modelgenLoadedAtField`, extract contracts do not carry it.
+
+---
+
+## Quality-rule mapping
+
+Quality rules map per layer.
+
+- `schema` and `sources` (and `gen --layer schema|sources`) map the ODCS
+  library form (`type: library`, `metric: invalidValues`,
+  `arguments.validValues`, `mustBe: 0`) to `accepted_values`; zero
+  `nullValues` and `duplicateValues` to `not_null` and `unique`; `rowCount`
+  with a bound to a row-count test. Other thresholds and `type: sql` rules
+  become singular tests under `tests/generated/`. Anything unmapped is
+  reported on stderr, never dropped, and `--strict` exits 1 for it.
+- `gen --staging` maps only property-level `rule: validValues` to
+  `accepted_values` and reports nothing it skips. `gen --raw` emits no
+  quality tests.
+
+A list that must reach both layers has to be written in both forms, and
+`schema --strict` fails on the `rule: validValues` one. Generated quality
+tests call `dbt_expectations.*` macros; modelgen does not check the package is
+installed.
+
+---
+
 ## Generated files
+
+**For `--layer schema` and `--layer sources`:** a single yml per contract
+(`_<name>__models.yml`, `_<name>__sources.yml`) plus any singular tests under
+`tests/generated/`. Neither writes model SQL.
+
+Every generated file starts with a header, `-- GENERATED by modelgen <version>
+from <name> <ver>. Do not edit.` (`#` in yml). The version is read from
+installed package metadata, so `check` drifts on every file after a modelgen
+upgrade, and output from an uninstalled tree carries `0.0.0`.
 
 ### `raw__<name>.sql`
 
@@ -183,7 +322,7 @@ from deduplicated
 where _modelgen_rn = 1
 ```
 
-Raw uses source-side column names throughout. Columns are listed explicitly, introspected from BigQuery (or from the contract in `--from-contract` mode) at generation time. Regenerate when the source schema changes.
+Raw uses source-side column names throughout. Columns are listed explicitly, introspected from BigQuery (or from the contract under contract-only introspection) at generation time. Regenerate when the source schema changes.
 
 ### `raw__<name>.yml`
 

@@ -188,3 +188,48 @@ class FakeIntrospector:
                 f"Registered: {list(self._schemas.keys())}"
             )
         return self._schemas[key]
+
+
+class IntrospectorChooser:
+    """Pick an Introspector per event contract by its dialect.
+
+    BigQuery is queried only for a BigQuery-dialect event when
+    credentials exist and --from-contract is absent. Everything else
+    is contract-only introspection. The shared BigQueryIntrospector is
+    built lazily; the missing-credentials notice prints once, and only
+    when a BigQuery-dialect event needs it.
+    """
+
+    def __init__(self, from_contract: bool, notice: str, print_fn):
+        self._from_contract = from_contract
+        self._notice = notice
+        self._print = print_fn
+        self._bq = None
+        self._noticed = False
+        self._creds: bool | None = None
+
+    def _has_creds(self) -> bool:
+        if self._creds is None:
+            self._creds = has_default_credentials()
+        return self._creds
+
+    def queries_bigquery(self, event) -> bool:
+        return (
+            not self._from_contract
+            and event.source.server_type == "bigquery"
+            and self._has_creds()
+        )
+
+    def for_event(self, event):
+        if self.queries_bigquery(event):
+            if self._bq is None:
+                self._bq = BigQueryIntrospector()
+            return self._bq
+        if (
+            not self._from_contract
+            and not self._noticed
+            and event.source.server_type == "bigquery"
+        ):
+            self._noticed = True
+            self._print(self._notice)
+        return ContractIntrospector(event)

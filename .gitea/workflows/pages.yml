@@ -33,6 +33,25 @@ jobs:
       - name: Build Documentation
         run: uv run mkdocs build
 
+      - name: Guard against third-party requests
+        run: |
+          set -euo pipefail
+          # Sovereign: the published site must not load anything from a third-party host.
+          # Matches real URLs (//host), so the privacy plugin's local copies under
+          # assets/external/<host>/ do not count. Source maps are skipped: never executed.
+          test -d site
+          HOSTS='unpkg\.com|img\.shields\.io|fonts\.googleapis|fonts\.gstatic|cdn\.jsdelivr'
+          # The one allowed reference: Material's bundled ResizeObserver polyfill loader,
+          # only ever requested by pre-2020 browsers.
+          ALLOWED='^site/assets/javascripts/bundle\.[0-9a-f]+\.min\.js:https://unpkg\.com/resize-observer-polyfill$'
+          HITS=$(grep -rIoE --exclude='*.map' "(https?:)?(//|\\\\/\\\\/)($HOSTS)[^\"'\`<> )]*" site | grep -vE "$ALLOWED" || true)
+          if [ -n "$HITS" ]; then
+            echo "Third-party references found in the built site:"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "No third-party references in the built site."
+
       - name: Sync to Main Website Repo
         env:
           MY_TOKEN: ${{ secrets.GITEATOKEN }}
