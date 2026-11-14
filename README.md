@@ -226,6 +226,7 @@ Put the file at the repo root. Every path in it is relative to the directory tha
 | `schema_output` | unset | `check` | Directory the schema yml is compared against. |
 | `sources_contracts` | unset | `check` | Glob of extract contracts for tables this project reads. Rendered as `modelgen sources` would. |
 | `sources_output` | unset | `check` | Directory the sources yml is compared against. |
+| `tests_output` | unset | `check` | Directory that replaces the leading `tests` of generated singular-test paths, so `tests/generated/x.sql` is compared at `<tests_output>/generated/x.sql` instead of under `schema_output`/`sources_output`. Pair it with `--tests-output` on `schema`/`sources`. Use it when the yml lives under `models/` but dbt must find the tests in its `tests/` directory. |
 
 Complete example:
 
@@ -387,13 +388,14 @@ On success, `gen` prints a File and Status table of written files. The status co
 
 ## 📦 Sources layer
 
-`modelgen sources` renders one `_<contract-name>__sources.yml` per extract contract. The filename uses the contract's `name`, not `dbtSourceName`. The file holds one `sources:` entry with `loaded_at_field`, `freshness`, a `tables:` list, and a column-set test (`dbt_expectations.expect_table_columns_to_match_set`). The consuming dbt project therefore needs the `dbt_expectations` package. Quality rules that map to singular tests go under `tests/generated/`.
+`modelgen sources` renders one `_<contract-name>__sources.yml` per extract contract. The filename uses the contract's `name`, not `dbtSourceName`. The file holds one `sources:` entry with `loaded_at_field`, `freshness`, a `tables:` list, and a column-set test (`dbt_expectations.expect_table_columns_to_match_set`). The consuming dbt project therefore needs the `dbt_expectations` package. Quality rules that map to singular tests go under `tests/generated/` of the output directory, or of `tests_output` when that is set (see Configuration).
 
 Read the customProperties below from the contract's top level unless the table says otherwise.
 
 | Property | Level | Effect |
 |---|---|---|
 | `dbtSourceName` | contract | Name of the dbt source. Default: the contract `name`. Must be a single value, not a list. |
+| `dbtColumnSetTest` | contract | Name of the column-set test, replacing `dbt_expectations.expect_table_columns_to_match_set`. For projects whose sources are bare table functions (for example DuckDB `read_parquet(...)`), where the dbt_expectations test errors. The macro must take the same `column_list` argument. Single value. |
 | `loadedAtField` | contract | Written as `loaded_at_field`. Optional. Passed through as written. |
 | `freshnessWarnAfter` | contract | `freshness.warn_after`. Format `N minutes`, `N hours` or `N days`. |
 | `freshnessErrorAfter` | contract | `freshness.error_after`. Same format. |

@@ -358,3 +358,91 @@ def test_zero_freshness_is_a_contract_error(tmp_path, val):
     )
     with pytest.raises(ContractError, match="freshnessWarnAfter"):
         render_sources(c)
+
+
+def test_column_set_test_name_override(tmp_path):
+    c = tmp_path / "c.yaml"
+    c.write_text(
+        CONTRACT.read_text().replace(
+            "customProperties:\n",
+            "customProperties:\n  - property: dbtColumnSetTest\n"
+            "    value: columns_match_set\n",
+            1,
+        )
+    )
+    doc = yaml.safe_load(render_sources(c)[SOURCES_YML])
+    (test, *_) = doc["sources"][0]["tables"][0]["data_tests"]
+    default = _table()["data_tests"][0]
+    (args,) = default.values()
+    assert test == {"columns_match_set": args}
+
+
+def test_column_set_test_name_list_is_a_contract_error(tmp_path):
+    from modelgen.contract import ContractError
+
+    c = tmp_path / "c.yaml"
+    c.write_text(
+        CONTRACT.read_text().replace(
+            "customProperties:\n",
+            "customProperties:\n  - property: dbtColumnSetTest\n"
+            "    value: [a, b]\n",
+            1,
+        )
+    )
+    with pytest.raises(ContractError):
+        render_sources(c)
+
+
+_ROW_COUNT = "bus_positions__extract_row_count.sql"
+
+
+def test_tests_output_rebases_singular_tests_on_write(tmp_path):
+    out, tests = tmp_path / "models" / "staging", tmp_path / "tests"
+    _cli(
+        "sources", str(CONTRACT), "-o", str(out),
+        "--tests-output", str(tests), cwd=tmp_path,
+    )  # fmt: skip
+    assert (out / SOURCES_YML).is_file()
+    assert (tests / "generated" / _ROW_COUNT).is_file()
+    assert not (out / "tests").exists()
+
+
+def _tests_project(tmp_path: Path) -> Path:
+    proj = _project(tmp_path)
+    (proj / ".modelgen.yml").write_text(
+        "sources_contracts: contracts/*.odcs.yaml\n"
+        "sources_output: models/staging\n"
+        "tests_output: tests\n"
+    )
+    _cli(
+        "sources", str(proj / "contracts" / "extract.odcs.yaml"),
+        "-o", str(proj / "models" / "staging"),
+        "--tests-output", str(proj / "tests"), cwd=proj,
+    )  # fmt: skip
+    return proj
+
+
+def test_check_clean_when_tests_output_matches(tmp_path):
+    proj = _tests_project(tmp_path)
+    ok = _cli("check", cwd=proj)
+    assert "in sync" in ok.stdout.lower()
+
+
+def test_check_flags_hand_edit_in_tests_output(tmp_path):
+    proj = _tests_project(tmp_path)
+    target = proj / "tests" / "generated" / _ROW_COUNT
+    target.write_text(target.read_text().replace("500000", "1"))
+    assert _cli("check", cwd=proj, check=False).returncode == 1
+
+
+def test_check_flags_missing_file_in_tests_output(tmp_path):
+    proj = _tests_project(tmp_path)
+    (proj / "tests" / "generated" / _ROW_COUNT).unlink()
+    res = _cli("check", cwd=proj, check=False)
+    assert res.returncode == 1
+    assert "missing" in res.stdout.lower()
+
+
+def test_schema_command_accepts_tests_output(tmp_path):
+    res = _cli("schema", "--help", cwd=tmp_path)
+    assert "--tests-output" in res.stdout

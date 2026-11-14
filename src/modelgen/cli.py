@@ -353,6 +353,14 @@ def gen(
             )
 
 
+def _dest(output: Path, filename: str, tests_output: Path | None) -> Path:
+    """Where a rendered file lands; `tests/...` moves under tests_output."""
+    parts = Path(filename).parts
+    if tests_output is not None and parts[0] == "tests":
+        return tests_output.joinpath(*parts[1:])
+    return output / filename
+
+
 def _write_schema(
     contract: Path,
     output: Path,
@@ -361,6 +369,7 @@ def _write_schema(
     server: str | None,
     strict: bool = False,
     sources: bool = False,
+    tests_output: Path | None = None,
 ) -> None:
     from modelgen.schema_mode import render_schema
     from modelgen.sources_mode import render_sources
@@ -377,7 +386,7 @@ def _write_schema(
         console.print(f"[red]Invalid contract:[/red] {e}")
         raise typer.Exit(1)
     for filename, content in files.items():
-        dest = output / filename
+        dest = _dest(output, filename, tests_output)
         if not dry_run:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(content)
@@ -420,6 +429,14 @@ def schema(
         "--strict",
         help="Exit 1 when a quality rule cannot be mapped to a dbt test.",
     ),
+    tests_output: Path | None = typer.Option(
+        None,
+        "--tests-output",
+        help=(
+            "Write singular tests (tests/generated/*.sql) under this"
+            " directory instead of <output>/tests/."
+        ),
+    ),
 ):
     """
     Generate models yml for tables the project PRODUCES.
@@ -435,7 +452,10 @@ def schema(
         modelgen schema contract.yml --table eta_models --server prod
     """
     _configure_logging(verbose)
-    _write_schema(contract, output, dry_run, table, server, strict)
+    _write_schema(
+        contract, output, dry_run, table, server, strict,
+        tests_output=tests_output,
+    )  # fmt: skip
 
 
 @app.command()
@@ -464,6 +484,14 @@ def sources(
         "--strict",
         help="Exit 1 when a quality rule cannot be mapped to a dbt test.",
     ),
+    tests_output: Path | None = typer.Option(
+        None,
+        "--tests-output",
+        help=(
+            "Write singular tests (tests/generated/*.sql) under this"
+            " directory instead of <output>/tests/."
+        ),
+    ),
 ):
     """
     Generate a sources yml for tables the project READS (extract contracts).
@@ -477,7 +505,10 @@ def sources(
         modelgen sources contracts/extract.odcs.yaml -o models/staging
     """
     _configure_logging(verbose)
-    _write_schema(contract, output, dry_run, table, None, strict, sources=True)
+    _write_schema(
+        contract, output, dry_run, table, None, strict, sources=True,
+        tests_output=tests_output,
+    )  # fmt: skip
 
 
 @app.command()
@@ -882,7 +913,7 @@ def check(
                 errors.append((contract_path.name, "parse", str(e)))
                 continue
             for filename, expected in files.items():
-                dest = out_dir / filename
+                dest = _dest(out_dir, filename, cfg.tests_output)
                 if not dest.exists():
                     drifted.append((dest, "", expected))
                     status = "[red]missing[/red]"

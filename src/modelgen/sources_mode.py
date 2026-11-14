@@ -10,6 +10,9 @@ rules (singular ones select from `{{ source(...) }}`).
 Customisation comes from the contract's customProperties:
 
 - `dbtSourceName`: source name (default: the contract name)
+- `dbtColumnSetTest`: name of the column-set test macro (default:
+  `dbt_expectations.expect_table_columns_to_match_set`); same
+  `column_list` argument
 - `externalLocation`: written to each table's `meta.external_location`
 - `loadedAtField`: source `loaded_at_field`
 - `freshnessWarnAfter` / `freshnessErrorAfter`: e.g. `2 days`
@@ -94,7 +97,11 @@ def _location(
 
 
 def _table(
-    obj: dict[str, Any], source: str, header: str, location: Any
+    obj: dict[str, Any],
+    source: str,
+    header: str,
+    location: Any,
+    columns_test: str = COLUMNS_TEST,
 ) -> tuple[dict[str, Any], ModelTests]:
     props = obj.get("properties") or []
     found = ModelTests()
@@ -105,7 +112,7 @@ def _table(
     if location:
         table["meta"] = {"external_location": location}
     found.model_tests.append(
-        {COLUMNS_TEST: {"column_list": [str(p["name"]) for p in props]}}
+        {columns_test: {"column_list": [str(p["name"]) for p in props]}}
     )
     found.column_tests.update(implied_tests(props))
     map_object(obj, header, found, source=source)
@@ -156,9 +163,19 @@ def render_sources(
     cname = str(doc.get("name") or "contract")
     meta = _meta(doc)
     source_name = _scalar("dbtSourceName", meta.get("dbtSourceName")) or cname
+    columns_test = (
+        _scalar("dbtColumnSetTest", meta.get("dbtColumnSetTest"))
+        or COLUMNS_TEST
+    )
     stamp = provenance_header(cname, doc.get("version"))
     built = [
-        _table(o, source_name, stamp, _location(o, meta, object_count))
+        _table(
+            o,
+            source_name,
+            stamp,
+            _location(o, meta, object_count),
+            columns_test,
+        )
         for o in schemas
     ]
     source: dict[str, Any] = {
