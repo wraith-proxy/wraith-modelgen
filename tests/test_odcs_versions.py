@@ -35,29 +35,7 @@ def test_accepts_v3_2_0_contracts(name):
     assert version_errors == []
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "bus-marts",
-        pytest.param(
-            "bus-positions",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="quality dimension 'validity' is not in the v3.2.0"
-                " enum (schema/0/quality/2/dimension)",
-            ),
-        ),
-        pytest.param(
-            "gtfs-timetable",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="unquoted YAML description text in"
-                " schema/1/properties/4 and schema/2/properties/10"
-                " yields stray keys (unevaluated properties)",
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("name", NAMES)
 def test_v3_2_0_contracts_fully_schema_valid(name):
     assert odcs_schema_errors(_load(name)) == []
 
