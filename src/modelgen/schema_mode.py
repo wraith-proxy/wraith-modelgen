@@ -48,6 +48,22 @@ def _meta(obj: dict[str, Any]) -> dict[str, Any]:
     return {k: v[0] if len(v) == 1 else v for k, v in seen.items()}
 
 
+def implied_tests(props: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """not_null for required/key properties, unique for a lone primaryKey."""
+    keys = [p for p in props if p.get("primaryKey")]
+    out: dict[str, list[str]] = {}
+    for prop in props:
+        is_key = bool(prop.get("primaryKey"))
+        tests: list[str] = []
+        if prop.get("required") or is_key:
+            tests.append("not_null")
+        # primary_key is not a constraint; uniqueness is a test.
+        if is_key and len(keys) == 1:
+            tests.append("unique")
+        out[str(prop["name"])] = tests
+    return out
+
+
 def _column(
     prop: dict[str, Any], dialect: Any
 ) -> tuple[dict[str, Any], list[str], bool]:
@@ -67,7 +83,6 @@ def _column(
     if required:
         col["constraints"] = [{"type": "not_null"}]
         tests.append("not_null")
-    # primary_key is not a constraint here; uniqueness is a test.
     return col, tests, is_key
 
 

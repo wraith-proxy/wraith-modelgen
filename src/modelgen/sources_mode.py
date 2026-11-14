@@ -29,7 +29,7 @@ import yaml
 from modelgen import __version__
 from modelgen.contract import ContractError, _load_doc
 from modelgen.quality import ModelTests, map_object
-from modelgen.schema_mode import _meta
+from modelgen.schema_mode import _meta, implied_tests
 
 COLUMNS_TEST = "dbt_expectations.expect_table_columns_to_match_set"
 _PERIODS = {
@@ -58,6 +58,23 @@ def _threshold(prop: str, value: Any) -> dict[str, Any]:
     return {"count": int(m.group(1)), "period": _PERIODS[m.group(2).lower()]}
 
 
+def _location(
+    obj: dict[str, Any], doc_meta: dict[str, Any], count: int
+) -> Any:
+    """Per-object externalLocation, else the contract's (one object only)."""
+    own = _meta(obj).get("externalLocation")
+    if own:
+        return own
+    shared = doc_meta.get("externalLocation")
+    if shared and count > 1:
+        raise ContractError(
+            f"externalLocation is set at contract level but the contract"
+            f" has {count} objects; set it on each object's"
+            f" customProperties (table {obj.get('name')!r} has none)."
+        )
+    return shared
+
+
 def _table(
     obj: dict[str, Any], source: str, header: str, location: Any
 ) -> tuple[dict[str, Any], ModelTests]:
@@ -72,6 +89,7 @@ def _table(
     found.model_tests.append(
         {COLUMNS_TEST: {"column_list": [str(p["name"]) for p in props]}}
     )
+    found.column_tests.update(implied_tests(props))
     map_object(obj, header, found, source=source)
     table["data_tests"] = found.model_tests
     columns = []
@@ -124,7 +142,7 @@ def render_sources(
         f" {doc.get('version', '')}. Do not edit."
     )
     built = [
-        _table(o, source_name, stamp, meta.get("externalLocation"))
+        _table(o, source_name, stamp, _location(o, meta, len(schemas)))
         for o in schemas
     ]
     source: dict[str, Any] = {

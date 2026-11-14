@@ -623,6 +623,18 @@ class TestCheckCommand:
         assert result.exit_code == 0
         assert "No contracts found" in strip_ansi(result.output)
 
+    @pytest.mark.parametrize("key", ["sources_contracts", "schema_contracts"])
+    def test_check_configured_layer_matching_nothing_fails(
+        self, tmp_path, key
+    ):
+        cfg = tmp_path / ".modelgen.yml"
+        cfg.write_text(f"{key}: nothing/*.yaml\n")
+        result = runner.invoke(app, ["check", "--config", str(cfg)])
+        out = strip_ansi(result.output)
+        assert result.exit_code == 1
+        assert key in out
+        assert "matched nothing" in out
+
     def test_check_skips_staging_when_no_columns(self, tmp_path):
         (tmp_path / "contracts").mkdir()
         (tmp_path / "contracts" / "raw_only.yml").write_text(

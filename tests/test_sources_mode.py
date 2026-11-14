@@ -74,6 +74,82 @@ def test_external_location_in_meta():
     }
 
 
+def test_required_properties_get_not_null():
+    cols = {c["name"]: c for c in _table()["columns"]}
+    assert "not_null" in cols["timestamp"]["data_tests"]
+    assert "not_null" in cols["bus_id"]["data_tests"]
+    assert "not_null" not in cols["operator"].get("data_tests", [])
+
+
+def _two_table_contract(tmp_path, *, obj_loc=False, doc_loc=True):
+    doc = yaml.safe_load(CONTRACT.read_text().split("\n---\n", 1)[1])
+    doc["customProperties"] = [
+        cp
+        for cp in doc.get("customProperties", [])
+        if cp["property"] != "externalLocation"
+    ]
+    if doc_loc:
+        doc["customProperties"].append(
+            {"property": "externalLocation", "value": "read_parquet('x')"}
+        )
+    first = doc["schema"][0]
+    second = {**first, "name": "other_positions"}
+    for o in (first, second):
+        o["quality"] = []
+    if obj_loc:
+        first["customProperties"] = [
+            {"property": "externalLocation", "value": "read_parquet('a')"}
+        ]
+        second["customProperties"] = [
+            {"property": "externalLocation", "value": "read_parquet('b')"}
+        ]
+    doc["schema"] = [first, second]
+    c = tmp_path / "multi.yaml"
+    c.write_text(yaml.safe_dump(doc, sort_keys=False))
+    return c
+
+
+def test_primary_key_gets_not_null_and_unique(tmp_path):
+    c = tmp_path / "pk.yaml"
+    c.write_text(
+        CONTRACT.read_text().replace(
+            "        name: operator\n",
+            "        name: operator\n        primaryKey: true\n",
+            1,
+        )
+    )
+    cols = {
+        col["name"]: col
+        for col in yaml.safe_load(render_sources(c)[SOURCES_YML])["sources"][
+            0
+        ]["tables"][0]["columns"]
+    }
+    assert cols["operator"]["data_tests"] == ["not_null", "unique"]
+
+
+def test_object_level_external_location_wins(tmp_path):
+    c = _two_table_contract(tmp_path, obj_loc=True)
+    tables = yaml.safe_load(render_sources(c)[SOURCES_YML])["sources"][0][
+        "tables"
+    ]
+    assert [t["meta"]["external_location"] for t in tables] == [
+        "read_parquet('a')",
+        "read_parquet('b')",
+    ]
+
+
+def test_contract_level_location_with_many_objects_is_an_error(tmp_path):
+    from modelgen.contract import ContractError
+
+    c = _two_table_contract(tmp_path)
+    with pytest.raises(ContractError, match="externalLocation"):
+        render_sources(c)
+
+
+def test_contract_level_location_with_one_object_still_works():
+    assert _table()["meta"]["external_location"].startswith("read_parquet(")
+
+
 def test_freshness_and_loaded_at_field():
     src = _doc()["sources"][0]
     assert src["loaded_at_field"] == '"timestamp"'

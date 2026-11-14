@@ -43,9 +43,13 @@ sources:
         NOT ingest time and not the time the position was measured: extract.py''s
         SAMPLE BY 3m labels each bucket and this is the bucket''s end (_bods__sources.yml:44).
         Do not use it as a freshness signal for vehicles; use recorded_at.'
+      data_tests:
+      - not_null
     - name: bus_id
       description: Operator vehicle ref. Reused across journeys and across operators,
         so never a key on its own; with operator it identifies one vehicle.
+      data_tests:
+      - not_null
     - name: operator
       description: OperatorRef (National Operator Code). Part of the bucket identity
         since 2026-09-20 so vehicles of different operators sharing a bus_id and

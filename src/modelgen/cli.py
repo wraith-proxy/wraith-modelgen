@@ -805,6 +805,16 @@ def check(
     contract_files = cfg.contract_files()
     schema_files = cfg.schema_contract_files()
     sources_files = cfg.sources_contract_files()
+    for key, pattern, files in (
+        ("schema_contracts", cfg.schema_contracts, schema_files),
+        ("sources_contracts", cfg.sources_contracts, sources_files),
+    ):
+        if pattern and not files:
+            console.print(
+                f"[red]Error:[/red] {key} pattern"
+                f" [dim]{pattern!r}[/dim] matched nothing in {cfg.root}"
+            )
+            raise typer.Exit(1)
     if not contract_files and not schema_files and not sources_files:
         console.print(
             f"[yellow]No contracts found.[/yellow] "
