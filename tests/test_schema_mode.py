@@ -40,7 +40,11 @@ def _contract(name: str) -> Path:
 
 
 def _rendered(name: str, **kw) -> tuple[str, dict]:
-    files = render_schema(_contract(name), **kw)
+    files = {
+        f: t
+        for f, t in render_schema(_contract(name), **kw).items()
+        if f.endswith(".yml")
+    }
     assert len(files) == 1
     ((fname, text),) = files.items()
     return fname, yaml.safe_load(text)
@@ -108,19 +112,17 @@ def test_single_pk_gets_unique_and_not_null():
 
 def test_compound_pk_gets_dbt_expectations_test_in_position_order():
     model = _models("bus-marts")["eta_models"]
-    assert model["data_tests"] == [
-        {
-            COMPOUND: {
-                "column_list": [
-                    "operator",
-                    "line",
-                    "direction",
-                    "day_type",
-                    "hour_band",
-                ]
-            }
+    assert model["data_tests"][0] == {
+        COMPOUND: {
+            "column_list": [
+                "operator",
+                "line",
+                "direction",
+                "day_type",
+                "hour_band",
+            ]
         }
-    ]
+    }
     for col in model["columns"]:
         if col["name"] in model["data_tests"][0][COMPOUND]["column_list"]:
             assert col["data_tests"] == ["not_null"]
@@ -165,11 +167,15 @@ def test_table_and_server_options_are_honoured():
 def test_goldens_match(name, tmp_path):
     _cli("schema", str(_contract(name)), "-o", str(tmp_path), cwd=tmp_path)
     golden = GOLDEN / name
-    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
-        p.name for p in golden.iterdir()
+    assert sorted(
+        p.relative_to(tmp_path) for p in tmp_path.rglob("*") if p.is_file()
+    ) == sorted(
+        p.relative_to(golden) for p in golden.rglob("*") if p.is_file()
     )
-    for p in golden.iterdir():
-        assert (tmp_path / p.name).read_text() == p.read_text()
+    for p in golden.rglob("*"):
+        if p.is_file():
+            rel = p.relative_to(golden)
+            assert (tmp_path / rel).read_text() == p.read_text()
 
 
 def test_header_has_no_paths_or_timestamps(tmp_path):
@@ -194,7 +200,7 @@ def test_schema_mode_output_deterministic(tmp_path):
         ["diff", "-r", str(a), str(b)], capture_output=True, text=True
     )
     assert diff.returncode == 0, diff.stdout
-    assert len(list(a.iterdir())) == 4
+    assert len(list(a.glob("*.yml"))) == 4
     cmp = filecmp.dircmp(a, b)
     assert not cmp.diff_files
 
@@ -204,8 +210,8 @@ def test_gen_layer_schema_matches_schema_command(tmp_path):
     c = _contract("bus-marts")
     _cli("schema", str(c), "-o", str(a), cwd=tmp_path)
     _cli("gen", str(c), "--layer", "schema", "-o", str(b), cwd=tmp_path)
-    assert [p.read_text() for p in a.iterdir()] == [
-        p.read_text() for p in b.iterdir()
+    assert [p.read_text() for p in sorted(a.rglob("*")) if p.is_file()] == [
+        p.read_text() for p in sorted(b.rglob("*")) if p.is_file()
     ]
 
 
@@ -231,7 +237,7 @@ def test_check_covers_schema_layer(tmp_path):
     )  # fmt: skip
     ok = _cli("check", cwd=proj)
     assert "in sync" in ok.stdout.lower()
-    target = next((proj / "models" / "marts").iterdir())
+    target = next((proj / "models" / "marts").glob("*.yml"))
     target.write_text(target.read_text() + "# drift\n")
     drift = _cli("check", cwd=proj, check=False)
     assert drift.returncode == 1

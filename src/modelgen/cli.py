@@ -343,21 +343,33 @@ def _write_schema(
     dry_run: bool,
     table: list[str] | None,
     server: str | None,
+    strict: bool = False,
 ) -> None:
     from modelgen.schema_mode import render_schema
 
+    unmapped: list[str] = []
     try:
-        files = render_schema(contract, server=server, tables=table)
+        files = render_schema(
+            contract, server=server, tables=table, unmapped=unmapped
+        )
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
         raise typer.Exit(1)
     for filename, content in files.items():
         dest = output / filename
         if not dry_run:
-            output.mkdir(parents=True, exist_ok=True)
+            dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(content)
         status = "dry-run" if dry_run else "written"
         console.print(f"{escape(str(dest))} {status}", highlight=False)
+    if unmapped:
+        typer.echo(
+            f"modelgen: {len(unmapped)} quality rule(s) not mapped:"
+            f" {', '.join(unmapped)}",
+            err=True,
+        )
+        if strict:
+            raise typer.Exit(1)
 
 
 @app.command()
@@ -382,12 +394,18 @@ def schema(
     ),
     table: list[str] | None = _TABLE_OPTION,
     server: str | None = _SERVER_OPTION,
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit 1 when a quality rule cannot be mapped to a dbt test.",
+    ),
 ):
     """
     Generate models yml for tables the project PRODUCES.
 
     One `_<contract-name>__models.yml` per contract: enforced column
-    types, not_null constraints and key tests. No sources block, no SQL,
+    types, not_null constraints, key tests and tests mapped from ODCS
+    quality rules (singular ones under tests/generated/). No sources block,
     no loaded-at column needed.
 
     \b
@@ -396,7 +414,7 @@ def schema(
         modelgen schema contract.yml --table eta_models --server prod
     """
     _configure_logging(verbose)
-    _write_schema(contract, output, dry_run, table, server)
+    _write_schema(contract, output, dry_run, table, server, strict)
 
 
 @app.command()

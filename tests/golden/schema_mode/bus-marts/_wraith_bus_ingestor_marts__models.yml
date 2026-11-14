@@ -16,6 +16,9 @@ models:
       - direction
       - day_type
       - hour_band
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 500
+      strictly: true
   columns:
   - name: operator
     description: National Operator Code, or '*' for a fit pooled across every operator.
@@ -108,6 +111,10 @@ models:
   config:
     contract:
       enforced: true
+  data_tests:
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 10000
+      strictly: true
   columns:
   - name: locality_norm
     description: Upper-cased, punctuation stripped, whitespace collapsed. The consumer

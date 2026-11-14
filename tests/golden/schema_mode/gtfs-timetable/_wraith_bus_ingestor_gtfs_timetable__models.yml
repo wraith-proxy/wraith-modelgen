@@ -8,6 +8,10 @@ models:
   config:
     contract:
       enforced: true
+  data_tests:
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 100000
+      strictly: true
   columns:
   - name: ATCOCode
     description: ''
@@ -46,6 +50,9 @@ models:
       - line
       - direction
       - pattern_id
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 10000
+      strictly: true
   columns:
   - name: operator
     description: Agency NOC.
@@ -119,6 +126,9 @@ models:
       - direction
       - pattern_id
       - seq
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 1000000
+      strictly: true
   columns:
   - name: operator
     description: ''
@@ -197,6 +207,9 @@ models:
       column_list:
       - live_operator
       - live_line
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 50
+      strictly: true
   columns:
   - name: live_operator
     description: ''
@@ -250,6 +263,9 @@ models:
       column_list:
       - line
       - locality_norm
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 50000
+      strictly: true
   columns:
   - name: line
     description: ''
