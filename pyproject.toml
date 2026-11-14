@@ -1,6 +1,6 @@
 [project]
 name = "wraith-modelgen"
-version = "0.15.0"
+version = "0.16.0"
 description = "dbt scaffolding from ODCS data contracts for BigQuery and DuckDB."
 readme = "README.md"
 license = { file = "LICENSE" }
