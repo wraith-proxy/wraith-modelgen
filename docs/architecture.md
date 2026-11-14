@@ -1,6 +1,6 @@
 # 👻 Architecture
 
-wraith-modelgen is a pipeline: contract in, dbt models out. Two layers. One direction.
+wraith-modelgen is a pipeline: contract in, dbt files out. Two model layers (raw, staging) plus two yml-only modes (schema, sources). One direction.
 
 ---
 
@@ -14,6 +14,13 @@ flowchart TD
     D --> E["generate()"]
     E --> F["raw__event.sql\nraw__event.yml"]
     E --> G["stg__event.sql\nstg__event.yml"]
+
+    A --> H["render_schema()\nschema_mode.py"]
+    A --> I["render_sources()\nsources_mode.py"]
+    H --> J["_name__models.yml\n+ tests/generated"]
+    I --> K["_name__sources.yml\n+ tests/generated"]
+    L["quality.py"] -.-> H
+    L -.-> I
 
     subgraph contract.py ["contract.py: parse + validate"]
         B
@@ -78,8 +85,14 @@ flowchart TD
 | Module | Responsibility |
 |---|---|
 | `contract.py` | YAML parsing, dataclasses, validation. |
-| `introspect.py` | BigQuery schema fetch. `FakeIntrospector` for tests and offline use. |
+| `introspect.py` | BigQuery schema fetch, and the contract-only introspector for offline use. |
 | `generator.py` | Jinja2 rendering, file writing, schema evolution logic. |
+| `dialect.py` | Warehouse seam: types, casts, `config()` rendering, partition support. BigQuery and DuckDB. Chosen by `servers[].type`. |
+| `schema_mode.py` | `modelgen schema`: models yml for tables the project produces. |
+| `sources_mode.py` | `modelgen sources`: sources yml for tables the project reads. |
+| `quality.py` | Maps ODCS quality rules to dbt tests for the schema and sources modes. Reports what it cannot map. |
+| `config.py` | `.modelgen.yml` loading for `run` and `check`. |
+| `scaffold.py` | `init` project layout and the `new` draft contract. |
 | `cli.py` | Typer commands, Rich output, error handling. |
 | `lint.py` | Semantic checks on the parsed contract. All findings in one pass. |
 | `src/modelgen/templates/` | Jinja2 templates for the four generated artefacts. Must live inside the package or the wheel ships without them. |
@@ -88,7 +101,7 @@ flowchart TD
 
 ## Design decisions
 
-**Deterministic output.** Same contract + same source schema = byte-identical files. CI can diff generated output against committed output to catch contract drift without running a BigQuery query.
+**Deterministic output.** Same contract + same source schema = byte-identical files. No timestamps, no paths. CI can diff generated output against committed output (`modelgen check`) to catch contract drift without running a BigQuery query. The header embeds the modelgen version, so an upgrade drifts every file until regenerated.
 
 **Introspection at gen time, not contract time.** The contract only declares what the consumer cares about. Raw column metadata comes from the live source schema. The warehouse is the source of truth for column names and types; the contract never duplicates them.
 

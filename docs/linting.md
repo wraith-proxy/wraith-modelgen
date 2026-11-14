@@ -28,6 +28,7 @@ edit to fix each finding.
 | `invalid-raw-dataset` / `invalid-staging-dataset` | `modelgenRaw.dataset` / `modelgenStaging.dataset` is not a valid BigQuery identifier |
 | `invalid-raw-strategy` / `invalid-staging-strategy` | `incrementalStrategy` is not one of `merge`, `insert_overwrite`, `microbatch` |
 | `invalid-staging-materialization` | `modelgenStaging.materialization` is not `snapshot` or `incremental` |
+| `invalid-raw-materialization` | DuckDB only: `modelgenRaw.materialization` is not `view` or `table` |
 | `snapshot-strategy-conflict` | A snapshot declares an `incrementalStrategy` other than `insert_overwrite`. A snapshot replaces whole `ds` partitions, so drop the key and let it derive |
 | `snapshot-partition-not-ds` | A snapshot declares a `partitionBy.field` that isn't `ds`. Drop `partitionBy` (it derives) or switch to `materialization: incremental` |
 | `ds-column-reserved` | A property maps to the name `ds`, which a snapshot model generates for itself |
@@ -38,7 +39,7 @@ edit to fix each finding.
 | `invalid-column-source` / `invalid-column-name` | A property's `physicalName` / `name` is not a valid identifier |
 | `duplicate-column-source` | The same source column (`physicalName`) is declared by two properties |
 | `duplicate-column-name` | Two properties map to the same staging `name` |
-| `invalid-column-type` | A property's `physicalType` cast target is not a BigQuery type (aliases like `INT` and `DECIMAL` are accepted; parameterised types and `ARRAY<>`/`STRUCT<>` too) |
+| `invalid-column-type` | A property's `physicalType` cast target is not a type of the contract's dialect (for BigQuery, aliases like `INT` and `DECIMAL` are accepted; parameterised types and `ARRAY<>`/`STRUCT<>` too) |
 | `unique-key-not-in-staging` | A `primaryKey` column is not among the selected staging properties, so the generated dbt `unique_key` would point at nothing |
 | `loaded-at-not-in-staging` | Same problem for `modelgenLoadedAtField` and the incremental filter |
 | `partition-field-not-in-staging` | `modelgenStaging.partitionBy.field` is not a declared property `name` (staging config uses post-rename names) |
@@ -51,6 +52,7 @@ edit to fix each finding.
 | `cluster-column-classified` | `clusterBy` names a classified column. Encryption emits BYTES and BigQuery cannot cluster on BYTES |
 | `partition-field-classified` | `partitionBy.field` is classified. BigQuery partitions on date, timestamp, datetime or int64 only |
 | `loaded-at-classified` | `modelgenLoadedAtField` is classified while `materialization: incremental`. The high-water-mark filter would compare a timestamp against ciphertext. A load timestamp is pipeline metadata, not personal data |
+| `dialect-unsupported-config` | The contract's dialect cannot honour the config. DuckDB has no partitions or clustering (`partitionBy`, `clusterBy` on a non-snapshot) and no encryption (classified columns) |
 | `invalid-exemption-reason` | A `modelgenExempt` entry declares no `reason`. Every exemption has to say why the rule does not apply |
 | `invalid-freshness-period` | `modelgenRaw.freshness` uses a period other than `minute`, `hour`, or `day` |
 | `invalid-freshness-count` | `modelgenRaw.freshness` declares a count that is not a positive integer |
