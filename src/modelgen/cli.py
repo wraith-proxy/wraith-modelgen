@@ -26,9 +26,11 @@ from modelgen.lint import warnings as lint_warnings
 app = typer.Typer(
     name="modelgen",
     help=(
-        "[bold cyan]👻[/bold cyan] BigQuery dbt model scaffolder."
+        "[bold cyan]👻[/bold cyan] dbt model scaffolder for BigQuery and"
+        " DuckDB."
         " Feed it a YAML data contract, get back generated raw and staging"
-        " models. Introspects BigQuery at generation time."
+        " models. Introspects the contract's server (BigQuery or DuckDB)"
+        " at generation time."
         " One layer per run."
     ),
     no_args_is_help=True,
@@ -98,7 +100,7 @@ _SERVER_OPTION = typer.Option(
     help=(
         "Select the contract server by its `server:` id. Default: the"
         " first BigQuery server, else the first server whose type modelgen"
-        " supports. Not accepted with --layer sources."
+        " supports."
     ),
 )
 
@@ -173,9 +175,12 @@ def gen(
     """
     Generate a dbt model layer from a YAML data contract.
 
-    Specify [bold]--raw[/bold] or [bold]--staging[/bold]. One layer per run.
+    Specify [bold]--raw[/bold] or [bold]--staging[/bold] or
+    [bold]--layer[/bold] (schema or sources). One layer per run.
+    [bold]--server[/bold] is not accepted with [bold]--layer sources[/bold].
 
-    Pass [bold]--from-contract[/bold] to skip BigQuery and generate from the
+    Pass [bold]--from-contract[/bold] to skip introspection (BigQuery or
+    DuckDB) and generate from the
     contract alone. This also happens automatically when no GCP Application
     Default Credentials are found.
 
@@ -493,10 +498,10 @@ def validate(
     """
     Validate a contract offline: structure first, then semantics.
 
-    Catches parse errors, missing fields, bad values, invalid BigQuery
+    Catches parse errors, missing fields, bad values, invalid column
     types and strategies, duplicate or unsafe column declarations, and
     staging configs that reference columns the model never selects,
-    all in one pass, before you spend a round-trip to BigQuery.
+    all in one pass, before you spend a round-trip to the warehouse.
     Every schema object in the contract is validated.
     """
     try:
@@ -570,8 +575,9 @@ def run(
     Find all contracts and regenerate every layer.
 
     Reads .modelgen.yml (or opinionated defaults) to locate contracts,
-    introspects BigQuery for each, and writes both layers. Reports each
-    failure by contract name and layer before exiting non-zero.
+    introspects each contract's server (BigQuery or DuckDB), and writes both
+    layers. Reports each failure by contract name and layer before exiting
+    non-zero.
 
     \b
     Reads .modelgen.yml (or uses opinionated defaults) to find contracts

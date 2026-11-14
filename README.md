@@ -130,7 +130,7 @@ Gotchas:
 
 ### `schema`
 
-Writes one `_<contract-name>__models.yml` for tables the project produces. Quality rules that map to dbt tests land under `tests/generated/` inside the output directory.
+Writes one `_<contract-name>__models.yml` for tables the project produces. Quality rules that map to dbt tests land under `tests/generated/` inside the output directory. A property-level `rule: validValues` is not one of them. It is reported as unmapped here and becomes `accepted_values` only in the staging yml.
 
 ```bash
 modelgen schema contracts/bus-marts.odcs.yaml -o models/marts --strict
@@ -312,7 +312,9 @@ schema:
 |---|---|
 | `not_null` | property `required: true` |
 | `unique` | property `unique: true` |
-| `accepted_values` | property `quality` with `rule: validValues` + `validValues: [...]` |
+| `accepted_values` | property `quality` with `rule: validValues` + `validValues: [...]`. Staging yml only. |
+
+`modelgen schema` and `modelgen sources` do not read that form. They report it as unmapped, so `--strict` exits 1 for it. Those layers map the ODCS library form instead: `type: library`, `metric: invalidValues`, `arguments.validValues` and `mustBe: 0`. `gen --staging` ignores the library form. A list that must reach both layers has to be written in both forms, and `schema --strict` fails on the `rule: validValues` one.
 
 ### Supported ODCS versions
 
@@ -373,7 +375,7 @@ DuckDB limits, enforced by lint or generation:
 - Known ID with an unsupported type: error that lists the supported types.
 - No `--server`: the first `type: bigquery` server wins, even when it comes after a DuckDB one. If there is none, the first server whose type a dialect supports is used, in contract order. If there is none at all, the error lists the supported types: `bigquery, duckdb, local`.
 
-Gotcha: `gen`, `run` and `check` use BigQuery introspection whenever Application Default Credentials are found, whatever the dialect. A DuckDB contract on a machine with GCP credentials will try BigQuery unless you pass `--from-contract`.
+Gotcha: when Application Default Credentials are found, `gen`, `run` and `check` build a BigQuery introspector whatever the dialect. `gen` asks it for the source columns before the dialect is applied (`render_raw` and `render_staging` in `src/modelgen/generator.py`). A DuckDB contract on a machine with GCP credentials therefore calls BigQuery unless you pass `--from-contract`. Whether that call succeeds depends on the BigQuery table and your access.
 
 ```bash
 modelgen gen contracts/events/build_summary.yml --staging --from-contract -o models/staging
@@ -574,11 +576,13 @@ partition the run writes. `materialization: incremental` on
 `modelgenStaging` opts back into a high-water-mark load, and then
 `incrementalStrategy` and `partitionBy` are yours to declare.
 
-Both layers load incrementally. Raw merges on the unique key, staging replaces
-one `ds` partition per run. Neither rebuilds the whole table, and no generated
-model ever emits `CREATE OR REPLACE TABLE ... AS SELECT`. Full rebuild is
-available as a documented exception rather than a default, which is covered in
-**[Tooling Decisions](docs/bigquery/decisions.md)**.
+On BigQuery, both layers load incrementally. Raw merges on the unique key,
+staging replaces one `ds` partition per run. Neither rebuilds the whole table,
+and no generated BigQuery model emits `CREATE OR REPLACE TABLE ... AS SELECT`.
+Full rebuild is available as a documented exception rather than a default,
+which is covered in **[Tooling Decisions](docs/bigquery/decisions.md)**. DuckDB
+models follow `materialization` instead: views by default, tables when the
+contract says `materialization: table` (see Targets and dialects).
 
 ---
 
@@ -641,7 +645,7 @@ Clean output ends with `Everything in sync. <n> file(s) match their contracts.` 
 ### Upgrade notes
 
 - Output is byte-identical for the same inputs. No timestamps, no paths. That is tested for `gen --raw` and `gen --staging` with `--from-contract`. The BigQuery path is not covered by that test.
-- ODCS quality rules map to dbt tests in the schema and sources layers only. `gen --raw` and `gen --staging` do not emit them. Review the generated tests after regeneration.
+- ODCS quality rules are mapped per layer. `schema` and `sources` (and `gen --layer schema|sources`) map them through `src/modelgen/quality.py`: `invalidValues` with `arguments.validValues` and `mustBe: 0` becomes `accepted_values`, zero `nullValues` and `duplicateValues` become `not_null` and `unique`, and `rowCount` with a bound becomes a row-count test. Other thresholds and `type: sql` rules become singular tests under `tests/generated/`. Anything unmapped is reported, never dropped. `gen --staging` maps only property-level `rule: validValues` to `accepted_values` (`src/modelgen/contract.py`) and reports nothing it skips. `gen --raw` emits no quality tests. Review the generated tests after regeneration.
 - `modelgen check` also checks the schema and sources layers when their config keys are set.
 - Several schema objects per contract: `gen` writes one model per object, in contract order. Check model names if a contract has several objects.
 - Pin `--server` if a contract lists several servers. Without it, the first `type: bigquery` server wins, then the first server of a supported type.
@@ -661,7 +665,7 @@ Clean output ends with `Everything in sync. <n> file(s) match their contracts.` 
 # Clone and set up
 git clone https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen
 cd wraith-modelgen
-uv run poe setup        # syncs deps + installs pre-commit hooks
+uv run poe setup        # creates .env if missing, syncs deps, installs pre-commit hooks
 
 # The quality gate
 uv run poe test         # pytest (interactive)
@@ -669,6 +673,8 @@ uv run poe test-ci      # pytest with coverage enforcement (≥80%)
 uv run poe lint         # ruff check
 uv run poe format       # ruff format
 ```
+
+`poe setup` runs `tasks.py`. It writes a placeholder `.env` (`APP_NAME=ghost-template`, `DEBUG=true`) only when none exists, runs `uv sync --all-extras`, and installs pre-commit hooks only when a `.git` directory is present.
 
 The test suite uses `FakeIntrospector` and runs without BigQuery credentials. Covers contract parsing, semantic linting, both layers, schema evolution scenarios, composite keys, REPEATED/RECORD types, determinism, drift detection, contract scaffolding, and error surfaces.
 

@@ -65,3 +65,12 @@ def test_gen_layer_sources_rejects_server(tmp_path):
     )  # fmt: skip
     assert result.exit_code == 2
     assert "--server" in result.output
+
+
+def test_bigquery_preference_is_case_sensitive_like_0_14_1():
+    servers = [
+        {"server": "dev", "type": "local"},
+        {"server": "mixed", "type": "BigQuery"},
+        {"server": "exact", "type": "bigquery"},
+    ]
+    assert _select_server(servers)["server"] == "exact"

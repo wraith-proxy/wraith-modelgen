@@ -10,7 +10,7 @@ SQL in dbt hours later, while they are still one YAML edit away from
 being fixed.
 
 Validation runs in two stages. First the contract is validated against
-the bundled **ODCS v3.0.2 JSON schema**. A malformed document is
+the bundled **ODCS JSON schema** for the contract's `apiVersion` (v3.0.2, v3.1.0 or v3.2.0). A malformed document is
 rejected before anything below runs. Then these semantic checks run on
 the parsed contract. The field names below are the ODCS locations you
 edit to fix each finding.

@@ -2,7 +2,7 @@
 
 ## Contract structure
 
-A contract is an [Open Data Contract Standard (ODCS) v3.0.2](https://github.com/bitol-io/open-data-contract-standard) YAML document, validated against the bundled ODCS JSON schema. It describes exactly **one** table: a BigQuery `server` (source project + dataset), one `schema` object (the source table), and its `properties` (the staging columns). modelgen's BigQuery/dbt specifics live in `customProperties`.
+A contract is an [Open Data Contract Standard (ODCS)](https://github.com/bitol-io/open-data-contract-standard) YAML document (v3.0.2, v3.1.0 or v3.2.0), validated against the bundled ODCS JSON schema for its `apiVersion`. It describes exactly **one** table: a `server` (a BigQuery project and dataset, or a DuckDB or `local` source), one `schema` object (the source table), and its `properties` (the staging columns). modelgen's BigQuery/dbt specifics live in `customProperties`.
 
 ```mermaid
 classDiagram
@@ -58,7 +58,7 @@ classDiagram
 |---|---|---|---|
 | `version` | string | yes | Contract version (semver) |
 | `kind` | string | yes | Must be `DataContract` |
-| `apiVersion` | string | yes | ODCS version; modelgen targets `v3.0.2` |
+| `apiVersion` | string | yes | ODCS version: `v3.0.2` (default), `v3.1.0` or `v3.2.0`. Picks the bundled JSON schema |
 | `id` | string | yes | Unique contract id (e.g. a UUID) |
 | `status` | string | yes | e.g. `active`, `draft` |
 | `name` | string | no | Data product name |

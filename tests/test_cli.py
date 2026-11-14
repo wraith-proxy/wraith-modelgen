@@ -736,3 +736,36 @@ class TestExemptions:
         result = runner.invoke(app, ["validate", str(p)])
         assert result.exit_code == 1
         assert "invalid-exemption-reason" in strip_ansi(result.output)
+
+
+class TestHelpTextBackendNeutral:
+    def test_top_level_help_not_bigquery_only(self):
+        out = strip_ansi(runner.invoke(app, ["--help"]).output)
+        assert "BigQuery dbt model scaffolder" not in out
+        assert "DuckDB" in out
+
+    def test_gen_help_mentions_layer_and_duckdb(self):
+        out = strip_ansi(runner.invoke(app, ["gen", "--help"]).output)
+        assert "--layer" in out
+        assert "--raw or --staging or --layer" in " ".join(out.split())
+
+    def test_validate_help_not_bigquery_only(self):
+        out = " ".join(
+            strip_ansi(
+                runner.invoke(app, ["validate", "--help"]).output
+            ).split()
+        )
+        assert "invalid BigQuery types" not in out
+
+    def test_run_help_not_bigquery_only(self):
+        out = " ".join(
+            strip_ansi(runner.invoke(app, ["run", "--help"]).output).split()
+        )
+        assert "introspects BigQuery for each" not in out
+
+    @pytest.mark.parametrize("cmd", ["run", "check", "validate", "schema"])
+    def test_layer_sources_sentence_only_where_layer_exists(self, cmd):
+        out = " ".join(
+            strip_ansi(runner.invoke(app, [cmd, "--help"]).output).split()
+        )
+        assert "--layer sources" not in out

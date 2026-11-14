@@ -422,7 +422,7 @@ def _select_server(servers: list[dict], name: str | None = None) -> dict:
             f" {', '.join(ids) or 'none'}."
         )
     for s in servers:
-        if str(s.get("type", "")).lower() == "bigquery":
+        if s.get("type") == "bigquery":
             return s
     for s in servers:
         try:
