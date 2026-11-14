@@ -1,3 +1,4 @@
+-- {{ header }}
 /*
   {{ event.raw_model_name }}.sql
   Origin Data Product: landing -> raw
@@ -6,7 +7,6 @@
   when the source schema changes.
 
   Source: {{ event.source.project }}.{{ event.source.dataset }}.{{ event.source.table }}
-  Contract: {{ contract_path }}
 */
 
 {{ dbt_config }}

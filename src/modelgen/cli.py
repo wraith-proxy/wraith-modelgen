@@ -222,7 +222,6 @@ def gen(
             introspector=introspector,
             output_dir=output,
             layer=layer,
-            contract_path=str(contract),
             dry_run=dry_run,
         )
     except (GenerationError, IntrospectionError) as e:
@@ -455,11 +454,6 @@ def run(
         )
         assert introspector is not None
 
-        try:
-            rel = contract_path.relative_to(cfg.root)
-        except ValueError:
-            rel = contract_path
-
         # Raw layer
         try:
             raw_result = generate(
@@ -467,7 +461,6 @@ def run(
                 introspector=introspector,
                 output_dir=cfg.raw_output,
                 layer=Layer.RAW,
-                contract_path=str(rel),
                 dry_run=dry_run,
             )
             status = (
@@ -490,7 +483,6 @@ def run(
                 introspector=introspector,
                 output_dir=cfg.staging_output,
                 layer=Layer.STAGING,
-                contract_path=str(rel),
                 dry_run=dry_run,
             )
             status = (
@@ -643,11 +635,6 @@ def check(
         )
         assert introspector is not None
 
-        try:
-            rel = contract_path.relative_to(cfg.root)
-        except ValueError:
-            rel = contract_path
-
         layers: list[tuple[Layer, Path]] = [(Layer.RAW, cfg.raw_output)]
         if event.staging.columns:
             layers.append((Layer.STAGING, cfg.staging_output))
@@ -659,7 +646,6 @@ def check(
                     introspector=introspector,
                     output_dir=output_dir,
                     layer=layer,
-                    contract_path=str(rel),
                     dry_run=True,
                 )
             except (GenerationError, IntrospectionError) as e:

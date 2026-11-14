@@ -397,6 +397,8 @@ class EventContract:
     staging: StagingConfig
     subject_field: str = ""  # source column identifying the data subject
     exemptions: list[Exemption] = field(default_factory=list)
+    contract_name: str = ""  # ODCS top-level name (falls back to name)
+    contract_version: str = ""  # ODCS top-level version
 
     @property
     def classified_columns(self) -> list[StagingColumn]:
@@ -496,4 +498,6 @@ class EventContract:
             ),
             subject_field=cfg.get("modelgenSubjectField") or "",
             exemptions=_exemptions(obj),
+            contract_name=str(doc.get("name") or obj["name"]),
+            contract_version=str(doc.get("version") or ""),
         )

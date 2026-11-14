@@ -1,3 +1,4 @@
+# {{ header }}
 version: 2
 
 models:
@@ -26,7 +27,7 @@ models:
 {% for test in col.tests %}
 {% if test.args %}
           - {{ test.name }}:
-{% for k, v in test.args.items() %}
+{% for k, v in test.args | dictsort %}
               {{ k }}: {{ v | json }}
 {% endfor %}
 {% else %}
