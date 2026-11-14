@@ -24,6 +24,7 @@ from modelgen.contract import (
     StagingColumn,
     StagingConfig,
 )
+from modelgen.dialect import get_dialect
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EVENT_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -40,34 +41,6 @@ _FRESHNESS_PERIODS = {"minute", "hour", "day"}
 # A description shorter than this is a placeholder, not documentation. The
 # floor is calibrated for readers who did not write the model.
 _MIN_DESCRIPTION_LENGTH = 50
-
-# Standard types plus the aliases BigQuery accepts (INT/DECIMAL family).
-_BQ_TYPES = {
-    "STRING",
-    "BYTES",
-    "INT64",
-    "INT",
-    "SMALLINT",
-    "INTEGER",
-    "BIGINT",
-    "TINYINT",
-    "BYTEINT",
-    "FLOAT64",
-    "FLOAT",
-    "NUMERIC",
-    "DECIMAL",
-    "BIGNUMERIC",
-    "BIGDECIMAL",
-    "BOOL",
-    "BOOLEAN",
-    "TIMESTAMP",
-    "DATE",
-    "TIME",
-    "DATETIME",
-    "GEOGRAPHY",
-    "JSON",
-    "INTERVAL",
-}
 
 
 class Severity(str, Enum):
@@ -90,14 +63,6 @@ class Finding:
     @property
     def exempted(self) -> bool:
         return bool(self.exempt_reason)
-
-
-def _valid_bq_type(raw: str) -> bool:
-    t = raw.strip().upper()
-    if t.startswith(("ARRAY<", "STRUCT<")) and t.endswith(">"):
-        return True
-    base = re.split(r"[(<]", t, maxsplit=1)[0].strip()
-    return base in _BQ_TYPES
 
 
 def lint_contract(contract: EventContract) -> list[Finding]:
@@ -373,7 +338,9 @@ def _lint_staging_columns(contract: EventContract) -> list[Finding]:
             )
         seen_names.add(col.name)
 
-        if col.type and not _valid_bq_type(col.type):
+        if col.type and not get_dialect(
+            contract.source.server_type
+        ).is_valid_physical_type(col.type):
             err(
                 "invalid-column-type",
                 f"staging column {col.name!r} casts to {col.type!r},"

@@ -19,6 +19,10 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from modelgen import __version__
 from modelgen.contract import ColumnTest, EventContract, StagingColumn
+from modelgen.dialect import Dialect, get_dialect
+from modelgen.dialect import render_cluster_by as _render_cluster_by
+from modelgen.dialect import staging_name_for as _staging_name_for
+from modelgen.dialect import staging_unique_key_dbt as _staging_unique_key_dbt
 from modelgen.introspect import IntrospectedColumn, Introspector
 
 logger = logging.getLogger(__name__)
@@ -94,26 +98,6 @@ def _join_cols(exprs: list[str], indent: int) -> str:
     return f"\n{pad}".join(out)
 
 
-def _staging_name_for(contract: EventContract, source_column: str) -> str:
-    """Look up the staging column name for a given source column. Falls back
-    to the source name if the column isn't in the staging contract."""
-    for col in contract.staging.columns:
-        if col.source == source_column:
-            return col.name
-    return source_column
-
-
-def _staging_unique_key(contract: EventContract) -> list[str]:
-    return [_staging_name_for(contract, k) for k in contract.unique_key]
-
-
-def _staging_unique_key_dbt(contract: EventContract) -> str:
-    keys = _staging_unique_key(contract)
-    if len(keys) == 1:
-        return f"'{keys[0]}'"
-    return "[" + ", ".join(f"'{k}'" for k in keys) + "]"
-
-
 def _validate_staging_against_source(
     contract: EventContract,
     introspected: list[IntrospectedColumn],
@@ -186,7 +170,7 @@ def _yml_column(col: StagingColumn, snapshot: bool) -> StagingColumn:
     return replace(col, tests=tests)
 
 
-def _plaintext_expr(col: StagingColumn) -> str:
+def _plaintext_expr(col: StagingColumn, dialect: Dialect) -> str:
     """The value shaped for AEAD, which takes STRING or BYTES.
 
     The declared cast still runs, so the plaintext is the contract's type
@@ -196,11 +180,16 @@ def _plaintext_expr(col: StagingColumn) -> str:
     if col.type.strip().upper() == "STRING":
         return f"cast({col.source} as STRING)"
     if col.needs_cast:
-        return f"cast(cast({col.source} as {col.type}) as string)"
+        inner = f"cast({col.source} as {dialect.cast_type(col.type)})"
+        return f"cast({inner} as string)"
     return f"cast({col.source} as string)"
 
 
-def _transform_expr(col: StagingColumn, subject_source: str = "") -> str:
+def _transform_expr(
+    col: StagingColumn,
+    subject_source: str = "",
+    dialect: Dialect | None = None,
+) -> str:
     """Build the SELECT expression for one staging column.
 
     Classified columns are encrypted here, on the way into staging, and are
@@ -208,6 +197,7 @@ def _transform_expr(col: StagingColumn, subject_source: str = "") -> str:
     is encrypted deterministically so that joins, row counts and aggregates
     survive the crypto-shred; everything else is randomised.
     """
+    dialect = dialect or get_dialect("bigquery")
     if col.classification:
         deterministic = col.source == subject_source
         fn = "deterministic_encrypt" if deterministic else "aead.encrypt"
@@ -220,12 +210,15 @@ def _transform_expr(col: StagingColumn, subject_source: str = "") -> str:
             f"{fn}(\n"
             f"        keys.keyset_chain("
             f"kek_resource_name, {keyset}),\n"
-            f"        {_plaintext_expr(col)},\n"
+            f"        {_plaintext_expr(col, dialect)},\n"
             f"        {_AAD}\n"
             f"    ) as {col.name}"
         )
     if col.needs_cast:
-        return f"cast({col.source} as {col.type}) as {col.name}"
+        return (
+            f"cast({col.source} as {dialect.cast_type(col.type)})"
+            f" as {col.name}"
+        )
     if col.needs_rename:
         return f"{col.source} as {col.name}"
     return col.name
@@ -263,6 +256,7 @@ def render_raw(
     raw_dedup_cols = f",\n{i8}".join(col_names) + ","
     raw_final_cols = _join_cols(col_names, indent=4)
 
+    dialect = get_dialect(contract.source.server_type)
     env = _make_env()
     header = generated_header(contract)
     ctx = {
@@ -276,13 +270,7 @@ def render_raw(
         "unique_key_dbt": contract.unique_key_dbt,
         "unique_key_yaml": _render_unique_key_yaml(contract.unique_key),
         "cluster_by_literal": _render_cluster_by(contract.raw.cluster_by),
-        "dbt_config": _render_dbt_config(
-            unique_key_dbt=contract.unique_key_dbt,
-            schema=contract.raw.dataset,
-            incremental_strategy=contract.raw.incremental_strategy,
-            partition_by=contract.raw.partition_by,
-            cluster_by=contract.raw.cluster_by,
-        ),
+        "dbt_config": dialect.render_dbt_config(contract, "raw"),
         "incremental_filter": _render_incremental_filter(
             loaded_at_field=contract.loaded_at_field,
             upstream_loaded_at_field=contract.loaded_at_field,
@@ -326,13 +314,14 @@ def render_staging(
             new_cols,
         )
 
+    dialect = get_dialect(contract.source.server_type)
     snapshot = contract.staging.is_snapshot
     encrypts = contract.encrypts
     raw_cols = _join_cols(
         [c.source for c in contract.staging.columns], indent=8
     )
     exprs = [
-        _transform_expr(c, contract.subject_field)
+        _transform_expr(c, contract.subject_field, dialect)
         for c in contract.staging.columns
     ]
     if snapshot:
@@ -364,15 +353,7 @@ def render_staging(
         "staging_unique_key_dbt": _staging_unique_key_dbt(contract),
         "staging_loaded_at_field": staging_loaded_at,
         "cluster_by_literal": _render_cluster_by(contract.staging.cluster_by),
-        "dbt_config": _render_dbt_config(
-            unique_key_dbt=(
-                "" if snapshot else _staging_unique_key_dbt(contract)
-            ),
-            schema=contract.staging.dataset,
-            incremental_strategy=contract.staging.incremental_strategy,
-            partition_by=contract.staging.partition_by,
-            cluster_by=contract.staging.cluster_by,
-        ),
+        "dbt_config": dialect.render_dbt_config(contract, "staging"),
         # A snapshot reads the whole dimension every run, so there is nothing
         # to filter. Incremental reads from its own high-water mark: the
         # upstream column is the raw layer's name (== source name), the
@@ -396,52 +377,11 @@ def render_staging(
     }, new_cols
 
 
-def _render_cluster_by(cols: list[str]) -> str:
-    """Render a cluster_by list as a dbt config literal."""
-    if not cols:
-        return ""
-    if len(cols) == 1:
-        return f"'{cols[0]}'"
-    return "[" + ", ".join(f"'{c}'" for c in cols) + "]"
-
-
 def _render_unique_key_yaml(keys: list[str]) -> str:
     """Render a unique_key as a YAML scalar or flow list for schema.yml."""
     if len(keys) == 1:
         return keys[0]
     return "[" + ", ".join(keys) + "]"
-
-
-def _render_dbt_config(
-    *,
-    unique_key_dbt: str,
-    schema: str,
-    incremental_strategy: str,
-    partition_by,
-    cluster_by: list[str],
-) -> str:
-    """Render the full {{ config(...) }} block. Pre-built so the SQL template
-    doesn't need to juggle conditional commas."""
-    lines = [
-        "    materialized='incremental'",
-        f"    incremental_strategy='{incremental_strategy}'",
-    ]
-    # insert_overwrite replaces whole partitions and never reads unique_key.
-    if unique_key_dbt:
-        lines.append(f"    unique_key={unique_key_dbt}")
-    lines.append(f"    schema='{schema}'")
-    if partition_by is not None:
-        lines.append(
-            f"    partition_by={{"
-            f"'field': '{partition_by.field}', "
-            f"'data_type': '{partition_by.data_type}', "
-            f"'granularity': '{partition_by.granularity}'"
-            f"}}"
-        )
-    if cluster_by:
-        lines.append(f"    cluster_by={_render_cluster_by(cluster_by)}")
-    body = ",\n".join(lines)
-    return "{{ config(\n" + body + "\n) }}"
 
 
 def _render_incremental_filter(

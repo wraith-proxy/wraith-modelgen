@@ -179,6 +179,7 @@ class SourceRef:
     project: str
     dataset: str
     table: str
+    server_type: str = "bigquery"  # ODCS servers[].type; picks the Dialect
 
     def __post_init__(self):
         for label, value in [
@@ -490,6 +491,7 @@ class EventContract:
                 project=bq.get("project", ""),
                 dataset=bq.get("dataset", ""),
                 table=table,
+                server_type=bq["type"],
             ),
             raw=RawConfig.from_raw(cfg.get("modelgenRaw")),
             staging=StagingConfig.from_raw(
