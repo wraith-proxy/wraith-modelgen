@@ -15,10 +15,13 @@ flowchart TD
     E --> F["raw__event.sql\nraw__event.yml"]
     E --> G["stg__event.sql\nstg__event.yml"]
 
-    A --> H["render_schema()\nschema_mode.py"]
-    A --> I["render_sources()\nsources_mode.py"]
-    H --> J["_name__models.yml\n+ tests/generated"]
-    I --> K["_name__sources.yml\n+ tests/generated"]
+    A --> S["select_schema_objects()\ncontract.py"]
+    S --> H["render_schema()\nschema_mode.py"]
+    S --> I["render_sources()\nsources_mode.py"]
+    H --> E["emit()\nyml_mode.py"]
+    I --> E
+    E --> J["_name__models.yml\n+ tests/generated"]
+    E --> K["_name__sources.yml\n+ tests/generated"]
     L["quality.py"] -.-> H
     L -.-> I
 
@@ -88,8 +91,9 @@ flowchart TD
 | `introspect.py` | BigQuery schema fetch, and the contract-only introspector for offline use. |
 | `generator.py` | Jinja2 rendering, file writing, schema evolution logic. |
 | `dialect.py` | Warehouse seam: types, casts, `config()` rendering, partition support. BigQuery and DuckDB. Chosen by `servers[].type`. |
-| `schema_mode.py` | `modelgen schema`: models yml for tables the project produces. |
-| `sources_mode.py` | `modelgen sources`: sources yml for tables the project reads. |
+| `schema_mode.py` | Produced mode: models yml for tables the project produces (`modelgen schema`). |
+| `sources_mode.py` | Extract mode: sources yml for tables the project reads (`modelgen sources`). |
+| `yml_mode.py` | What the two yml modes share: the filename slug, `customProperties` as a mapping, and `emit()`, which dumps the yml and merges singular tests and unmapped rules. Object selection (`select_schema_objects`) lives in `contract.py`, which `EventContract` shares. |
 | `quality.py` | Maps ODCS quality rules to dbt tests for the schema and sources modes. Reports what it cannot map. |
 | `config.py` | `.modelgen.yml` loading for `run` and `check`. |
 | `scaffold.py` | `init` project layout and the `new` draft contract. |

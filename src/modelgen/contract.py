@@ -529,27 +529,7 @@ class EventContract:
         server_name: str | None = None,
         tables: list[str] | None = None,
     ) -> list[EventContract]:
-        schemas = doc.get("schema") or []
-        if not schemas:
-            raise ContractError(
-                "Contract declares no schema objects. Add at least one"
-                " entry under schema:."
-            )
-        names = [str(o.get("name")) for o in schemas]
-        dupes = sorted({n for n in names if names.count(n) > 1})
-        if dupes:
-            raise ContractError(
-                f"Duplicate schema object name(s): {', '.join(dupes)}."
-                " Each object becomes a model, so names must be unique."
-            )
-        if tables is not None:
-            unknown = [t for t in tables if t not in names]
-            if unknown:
-                raise ContractError(
-                    f"Unknown table(s): {', '.join(unknown)}. Objects in"
-                    f" this contract: {', '.join(names)}."
-                )
-            schemas = [o for o in schemas if str(o.get("name")) in tables]
+        schemas, _ = select_schema_objects(doc, tables, unique=True)
 
         server = _select_server(doc.get("servers") or [], server_name)
         project, dataset = get_dialect(server["type"]).source_location(server)
@@ -605,6 +585,43 @@ class EventContract:
             contract_name=str(doc.get("name") or obj["name"]),
             contract_version=str(doc.get("version") or ""),
         )
+
+
+def select_schema_objects(
+    doc: dict[str, Any],
+    tables: list[str] | None = None,
+    *,
+    unique: bool = False,
+) -> tuple[list[dict[str, Any]], int]:
+    """(chosen schema objects, total object count) for a parsed contract.
+
+    Raises ContractError for an empty `schema:` and for unknown `tables`.
+    With `unique`, duplicate object names are rejected too, before the
+    unknown-table check. The total is the count before `tables` narrows.
+    """
+    schemas = doc.get("schema") or []
+    if not schemas:
+        raise ContractError(
+            "Contract declares no schema objects. Add at least one"
+            " entry under schema:."
+        )
+    names = [str(o.get("name")) for o in schemas]
+    if unique:
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ContractError(
+                f"Duplicate schema object name(s): {', '.join(dupes)}."
+                " Each object becomes a model, so names must be unique."
+            )
+    if tables is None:
+        return schemas, len(schemas)
+    unknown = [t for t in tables if t not in names]
+    if unknown:
+        raise ContractError(
+            f"Unknown table(s): {', '.join(unknown)}. Objects in"
+            f" this contract: {', '.join(names)}."
+        )
+    return [o for o in schemas if str(o.get("name")) in tables], len(schemas)
 
 
 def _load_doc(text: str, source: str) -> dict[str, Any]:

@@ -27,12 +27,11 @@ import re
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from modelgen.contract import ContractError, _load_doc
+from modelgen.contract import ContractError, _load_doc, select_schema_objects
 from modelgen.generator import provenance_header
 from modelgen.quality import ModelTests, map_object
-from modelgen.schema_mode import _meta, implied_tests
+from modelgen.schema_mode import implied_tests
+from modelgen.yml_mode import custom_properties, emit, slug
 
 COLUMNS_TEST = "dbt_expectations.expect_table_columns_to_match_set"
 _PERIODS = {
@@ -47,8 +46,7 @@ _PERIODS = {
 
 def sources_filename(contract_name: str) -> str:
     """`_<contract-name>__sources.yml`, slugged like the models yml."""
-    slug = re.sub(r"[^a-z0-9]+", "_", contract_name.lower()).strip("_")
-    return f"_{slug}__sources.yml"
+    return f"_{slug(contract_name)}__sources.yml"
 
 
 def _threshold(prop: str, value: Any) -> dict[str, Any]:
@@ -83,7 +81,7 @@ def _location(
 
     `count` is the UNFILTERED object count so `--table` cannot change
     whether a shared location is accepted."""
-    own = _meta(obj).get("externalLocation")
+    own = custom_properties(obj).get("externalLocation")
     if own:
         return own
     shared = doc_meta.get("externalLocation")
@@ -143,25 +141,10 @@ def render_sources(
     `<table>.<rule>`.
     """
     doc = _load_doc(contract.read_text(), str(contract))
-    schemas = doc.get("schema") or []
-    if not schemas:
-        raise ContractError(
-            "Contract declares no schema objects. Add at least one"
-            " entry under schema:."
-        )
-    names = [str(o.get("name")) for o in schemas]
-    object_count = len(schemas)
-    if tables is not None:
-        unknown = [t for t in tables if t not in names]
-        if unknown:
-            raise ContractError(
-                f"Unknown table(s): {', '.join(unknown)}. Objects in"
-                f" this contract: {', '.join(names)}."
-            )
-        schemas = [o for o in schemas if str(o["name"]) in tables]
+    schemas, object_count = select_schema_objects(doc, tables)
 
     cname = str(doc.get("name") or "contract")
-    meta = _meta(doc)
+    meta = custom_properties(doc)
     source_name = _scalar("dbtSourceName", meta.get("dbtSourceName")) or cname
     columns_test = (
         _scalar("dbtColumnSetTest", meta.get("dbtColumnSetTest"))
@@ -196,18 +179,13 @@ def render_sources(
     if freshness:
         source["freshness"] = freshness
     source["tables"] = [t for t, _ in built]
-    body = yaml.safe_dump(
+    return emit(
+        stamp,
+        sources_filename(cname),
         {"version": 2, "sources": [source]},
-        sort_keys=False,
-        allow_unicode=True,
-        width=79,
+        built,
+        unmapped,
     )
-    files = {sources_filename(cname): f"# {stamp}\n" + body}
-    for _, found in built:
-        files.update(found.singular)
-        if unmapped is not None:
-            unmapped.extend(found.unmapped)
-    return files
 
 
 def _description(doc: dict[str, Any]) -> str:

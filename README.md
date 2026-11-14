@@ -59,7 +59,7 @@ modelgen gen contract.yml --raw --dry-run  # preview without writing
 | `new` | Bootstrap a draft contract from a live BigQuery table, keys guessed and marked TODO |
 | `validate` | Offline structural + semantic lint over every schema object; `--strict` promotes warnings to failures. A rule that's wrong for one contract can be exempted with `modelgenExempt`; a reason is mandatory, and exempted findings still print |
 | `gen` | Generate one layer (`--raw` or `--staging`), or one mode's yml (`--layer schema` / `--layer sources`), from one contract |
-| `run` | Regenerate raw and staging for every contract under `.modelgen.yml` |
+| `run` | Regenerate raw and staging for every event contract under `.modelgen.yml`, plus the produced and extract yml and tests when their config keys are set |
 | `schema` | Write `_<contract-name>__models.yml` for tables the project produces |
 | `sources` | Write `_<contract-name>__sources.yml` for tables the project reads (extract contracts) |
 | `check` | Render in memory, diff against disk, exit non-zero on drift. Writes nothing. |
@@ -270,7 +270,7 @@ Gotchas, all from the code:
 - A `schema_contracts` or `sources_contracts` glob without its `*_output` key is skipped silently by `run` and `check`. Set both or neither.
 - `run` has no `--strict`. It prints unmapped quality rules on stderr and exits 0. Use `schema --strict` or `sources --strict` as a CI gate.
 - The default `contracts` glob is `*.yml`. ODCS files named `*.odcs.yaml` need their own glob.
-- Keep extract contracts out of the `contracts` glob. Event contracts require `modelgenLoadedAtField` on each schema object. `run` and `check` report its absence as a `parse` error. Sources contracts do not carry that property.
+- Keep extract contracts out of the `contracts` glob. Event contracts require `modelgenLoadedAtField` on each schema object. `run` and `check` report its absence as a `parse` error. Extract contracts do not carry that property.
 - `gen`, `schema`, `sources` and `validate` never read this file. Pass their paths and flags explicitly.
 
 ---

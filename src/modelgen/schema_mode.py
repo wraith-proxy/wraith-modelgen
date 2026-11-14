@@ -13,16 +13,19 @@ contract order throughout.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from modelgen.contract import ContractError, _load_doc, _select_server
+from modelgen.contract import (
+    ContractError,
+    _load_doc,
+    _select_server,
+    select_schema_objects,
+)
 from modelgen.dialect import get_dialect
 from modelgen.generator import provenance_header
 from modelgen.quality import ModelTests, map_object
+from modelgen.yml_mode import custom_properties, emit, slug
 
 COMPOUND_TEST = "dbt_expectations.expect_compound_columns_to_be_unique"
 
@@ -30,22 +33,7 @@ COMPOUND_TEST = "dbt_expectations.expect_compound_columns_to_be_unique"
 def schema_filename(contract_name: str) -> str:
     """`_<contract-name>__models.yml`, name lower-cased, non-alphanumerics
     collapsed to one underscore."""
-    slug = re.sub(r"[^a-z0-9]+", "_", contract_name.lower()).strip("_")
-    return f"_{slug}__models.yml"
-
-
-def _meta(obj: dict[str, Any]) -> dict[str, Any]:
-    """customProperties ({property, value} list) as a mapping.
-
-    A property named more than once (ODCS allows it, and real contracts
-    use it, e.g. several `consumes`) becomes a list of its values in
-    declaration order, so nothing is silently dropped.
-    """
-    seen: dict[str, list[Any]] = {}
-    for cp in obj.get("customProperties") or []:
-        if "property" in cp:
-            seen.setdefault(str(cp["property"]), []).append(cp.get("value"))
-    return {k: v[0] if len(v) == 1 else v for k, v in seen.items()}
+    return f"_{slug(contract_name)}__models.yml"
 
 
 def implied_tests(props: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -106,7 +94,7 @@ def _model(
         "description": obj.get("description", ""),
         "config": {"contract": {"enforced": True}},
     }
-    meta = _meta(obj)
+    meta = custom_properties(obj)
     if meta:
         model["meta"] = meta
     if compound:
@@ -138,21 +126,7 @@ def render_schema(
     appended to `unmapped` as `<model>.<rule>`.
     """
     doc = _load_doc(contract.read_text(), str(contract))
-    schemas = doc.get("schema") or []
-    if not schemas:
-        raise ContractError(
-            "Contract declares no schema objects. Add at least one"
-            " entry under schema:."
-        )
-    names = [str(o.get("name")) for o in schemas]
-    if tables is not None:
-        unknown = [t for t in tables if t not in names]
-        if unknown:
-            raise ContractError(
-                f"Unknown table(s): {', '.join(unknown)}. Objects in"
-                f" this contract: {', '.join(names)}."
-            )
-        schemas = [o for o in schemas if str(o["name"]) in tables]
+    schemas, _ = select_schema_objects(doc, tables)
 
     chosen = _select_server(doc.get("servers") or [], server)
     dialect = get_dialect(str(chosen["type"]))
@@ -160,15 +134,10 @@ def render_schema(
     cname = str(doc.get("name") or "contract")
     stamp = provenance_header(cname, doc.get("version"))
     built = [_model(o, dialect, stamp) for o in schemas]
-    body = yaml.safe_dump(
+    return emit(
+        stamp,
+        schema_filename(cname),
         {"version": 2, "models": [m for m, _ in built]},
-        sort_keys=False,
-        allow_unicode=True,
-        width=79,
+        built,
+        unmapped,
     )
-    files = {schema_filename(cname): f"# {stamp}\n" + body}
-    for _, found in built:
-        files.update(found.singular)
-        if unmapped is not None:
-            unmapped.extend(found.unmapped)
-    return files
