@@ -1,13 +1,19 @@
+# {{ header }}
 version: 2
 
 sources:
   - name: {{ event.source.dataset }}
-    project: {{ event.source.project }}
+{% if source_head %}
+{{ source_head }}
+{% endif %}
     description: "Landing zone for {{ event.name }}."
     tables:
       - name: {{ event.source.table }}
         description: "Landed {{ event.name }} events. Source schema as observed at gen time."
         loaded_at_field: {{ event.loaded_at_field }}
+{% if source_table_extra %}
+{{ source_table_extra }}
+{% endif %}
 {% if freshness %}
         freshness:
 {% if freshness.warn_after %}
@@ -30,10 +36,7 @@ models:
   - name: {{ event.raw_model_name }}
     description: "Origin Data Product. {% if event.raw.dedup %}Deduplicated{% else %}Pass-through{% endif %} raw view of {{ event.name }}. Schema mirrors source; new columns flow through."
     config:
-      materialized: incremental
-      incremental_strategy: {{ event.raw.incremental_strategy }}
-      unique_key: {{ unique_key_yaml }}
-      schema: {{ event.raw.dataset }}
+{{ yml_config }}
     columns:
 {% for col in introspected_columns %}
       - name: {{ col.name }}

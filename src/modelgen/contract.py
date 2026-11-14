@@ -9,9 +9,14 @@ because staging absorbs the drift.
 ODCS is a general standard; modelgen reads the subset it needs and carries
 its BigQuery/dbt specifics in ODCS `customProperties`:
 
+  schema[]                   -> one raw + one staging model per object, in
+                                contract order (`from_file_all`)
   schema[].name              -> event name (dbt model stem)
   schema[].physicalName      -> source table
   servers[bigquery]          -> source project + dataset
+  servers[duckdb | local]    -> DuckDB dialect: database (or path) + schema;
+                                `local` with `format: parquet` is a Parquet
+                                landing file read via external_location
   schema[].properties[]      -> staging columns
     property.name            -> staging (consumer-facing) column name
     property.physicalName    -> source column name
@@ -47,22 +52,58 @@ from typing import Any
 import jsonschema
 import yaml
 
-ODCS_API_VERSION = "v3.0.2"
-_SCHEMA_PATH = (
-    Path(__file__).parent / "schema" / "odcs-json-schema-v3.0.2.json"
+from modelgen.dialect import (
+    UnknownDialectError,
+    get_dialect,
+    supported_server_types,
 )
+
+ODCS_API_VERSION = "v3.0.2"
+SUPPORTED_ODCS_VERSIONS = ("v3.0.2", "v3.1.0", "v3.2.0")
+_SCHEMA_DIR = Path(__file__).parent / "schema"
 
 
 class ContractError(ValueError):
     """Raised when a contract is malformed or references invalid state."""
 
 
-@lru_cache(maxsize=1)
-def _odcs_validator() -> jsonschema.protocols.Validator:
-    schema = json.loads(_SCHEMA_PATH.read_text())
+@lru_cache(maxsize=None)
+def _odcs_validator(
+    version: str = ODCS_API_VERSION,
+) -> jsonschema.protocols.Validator:
+    path = _SCHEMA_DIR / f"odcs-json-schema-{version}.json"
+    schema = json.loads(path.read_text())
     cls = jsonschema.validators.validator_for(schema)
     cls.check_schema(schema)
     return cls(schema)
+
+
+def odcs_schema_errors(doc: dict[str, Any]) -> list[Any]:
+    """Validate ``doc`` against the bundled schema for its apiVersion.
+
+    A missing or non-string apiVersion is validated against the default
+    (v3.0.2) schema, which reports it. An unknown string version raises
+    ContractError listing the supported versions.
+    """
+    version = doc.get("apiVersion")
+    if not isinstance(version, str):
+        version = ODCS_API_VERSION
+    elif version not in SUPPORTED_ODCS_VERSIONS:
+        # v2.x and v3.0.0/3.0.1 stay accepted via the v3.0.2 schema enum.
+        if version in _LEGACY_ODCS_VERSIONS:
+            version = ODCS_API_VERSION
+        else:
+            raise ContractError(
+                f"Contract is not valid ODCS: unsupported apiVersion"
+                f" {version!r}. Supported versions:"
+                f" {', '.join(SUPPORTED_ODCS_VERSIONS)}."
+            )
+    return sorted(
+        _odcs_validator(version).iter_errors(doc), key=lambda e: e.path
+    )
+
+
+_LEGACY_ODCS_VERSIONS = ("v3.0.1", "v3.0.0", "v2.2.2", "v2.2.1", "v2.2.0")
 
 
 @dataclass(frozen=True)
@@ -149,6 +190,8 @@ class SourceRef:
     project: str
     dataset: str
     table: str
+    server_type: str = "bigquery"  # ODCS servers[].type; picks the Dialect
+    server_format: str = ""  # ODCS servers[].format (local: parquet)
 
     def __post_init__(self):
         for label, value in [
@@ -245,6 +288,8 @@ class RawConfig:
     partition_by: PartitionConfig | None = None
     cluster_by: list[str] = field(default_factory=list)
     freshness: FreshnessConfig | None = None
+    # "" lets the dialect choose. Only the DuckDB dialect reads it.
+    materialization: str = ""
 
     @classmethod
     def from_raw(cls, raw: dict | None) -> RawConfig:
@@ -256,6 +301,7 @@ class RawConfig:
             partition_by=PartitionConfig.from_raw(raw.get("partitionBy")),
             cluster_by=_cluster_by(raw),
             freshness=FreshnessConfig.from_raw(raw.get("freshness")),
+            materialization=raw.get("materialization", ""),
         )
 
 
@@ -346,14 +392,51 @@ def _exemptions(obj: dict) -> list[Exemption]:
     ]
 
 
-def _bigquery_server(servers: list[dict]) -> dict:
-    bq = [s for s in servers if s.get("type") == "bigquery"]
-    if not bq:
+def _select_server(servers: list[dict], name: str | None = None) -> dict:
+    """Pick the server to generate against.
+
+    With `name`, the server whose `server:` id matches; it must be of a
+    supported type. Without, the first `type: bigquery` server (as in
+    0.14.x), and only if there is none, the first server whose `type` a
+    registered dialect answers to (contract order).
+
+    dialect.py imports contract.py only for type checking, so this module
+    can use `get_dialect` directly.
+    """
+    if name is not None:
+        ids = [str(s.get("server")) for s in servers]
+        for s in servers:
+            if str(s.get("server")) != name:
+                continue
+            try:
+                get_dialect(str(s.get("type", "")))
+            except UnknownDialectError as e:
+                raise ContractError(
+                    f"Server {name!r} has type {s.get('type')!r}, which no"
+                    f" dialect supports. Supported dialects:"
+                    f" {', '.join(supported_server_types())}."
+                ) from e
+            return s
         raise ContractError(
-            "Contract has no BigQuery server. Add a servers entry with"
-            " type: bigquery, project, and dataset."
+            f"No server named {name!r}. Servers in this contract:"
+            f" {', '.join(ids) or 'none'}."
         )
-    return bq[0]
+    for s in servers:
+        if s.get("type") == "bigquery":
+            return s
+    for s in servers:
+        try:
+            get_dialect(str(s.get("type", "")))
+        except UnknownDialectError:
+            continue
+        return s
+    found = ", ".join(sorted({str(s.get("type")) for s in servers})) or "none"
+    raise ContractError(
+        "Contract has no BigQuery server or other supported server (found: "
+        f"{found}). Supported dialects: "
+        f"{', '.join(supported_server_types())}. Add a servers entry with"
+        " one of those types."
+    )
 
 
 @dataclass
@@ -367,6 +450,8 @@ class EventContract:
     staging: StagingConfig
     subject_field: str = ""  # source column identifying the data subject
     exemptions: list[Exemption] = field(default_factory=list)
+    contract_name: str = ""  # ODCS top-level name (falls back to name)
+    contract_version: str = ""  # ODCS top-level version
 
     @property
     def classified_columns(self) -> list[StagingColumn]:
@@ -397,46 +482,92 @@ class EventContract:
         return cls.from_text(path.read_text(), source=str(path))
 
     @classmethod
-    def from_text(cls, text: str, source: str = "<string>") -> EventContract:
-        try:
-            doc = yaml.safe_load(text)
-        except yaml.YAMLError as e:
-            raise ContractError(
-                f"Failed to parse YAML at {source}: {e}"
-            ) from e
-
-        if not isinstance(doc, dict):
-            raise ContractError(
-                f"Contract root must be a mapping, got {type(doc).__name__}"
-            )
-
-        errors = sorted(
-            _odcs_validator().iter_errors(doc), key=lambda e: e.path
+    def from_file_all(
+        cls,
+        path: Path,
+        *,
+        server: str | None = None,
+        tables: list[str] | None = None,
+    ) -> list[EventContract]:
+        return cls.from_text_all(
+            path.read_text(), source=str(path), server=server, tables=tables
         )
-        if errors:
-            first = errors[0]
-            loc = "/".join(str(p) for p in first.path) or "<root>"
-            raise ContractError(
-                f"Contract at {source} is not valid ODCS"
-                f" ({len(errors)} error(s)). First at {loc}:"
-                f" {first.message}"
-            )
 
-        if doc.get("kind") != "DataContract":
+    @classmethod
+    def from_text(cls, text: str, source: str = "<string>") -> EventContract:
+        """Parse a contract that describes exactly one table."""
+        doc = _load_doc(text, source)
+        count = len(doc.get("schema") or [])
+        if count != 1:
             raise ContractError(
-                f"kind must be 'DataContract', got {doc.get('kind')!r}."
+                "Expected exactly one schema object, got"
+                f" {count}. Use from_text_all for multi-table contracts."
             )
+        return cls._from_doc(doc)[0]
 
+    @classmethod
+    def from_text_all(
+        cls,
+        text: str,
+        source: str = "<string>",
+        *,
+        server: str | None = None,
+        tables: list[str] | None = None,
+    ) -> list[EventContract]:
+        """One EventContract per schema object, in contract order.
+
+        `server` picks a server by its `server:` id (default: the first
+        server of a supported type). `tables` limits the result to the
+        named objects; the order stays the contract's, not the caller's.
+        """
+        return cls._from_doc(_load_doc(text, source), server, tables)
+
+    @classmethod
+    def _from_doc(
+        cls,
+        doc: dict[str, Any],
+        server_name: str | None = None,
+        tables: list[str] | None = None,
+    ) -> list[EventContract]:
         schemas = doc.get("schema") or []
-        if len(schemas) != 1:
+        if not schemas:
             raise ContractError(
-                "modelgen contracts describe exactly one table:"
-                f" expected one schema object, got {len(schemas)}."
+                "Contract declares no schema objects. Add at least one"
+                " entry under schema:."
             )
-        obj = schemas[0]
-        props = obj.get("properties") or []
+        names = [str(o.get("name")) for o in schemas]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ContractError(
+                f"Duplicate schema object name(s): {', '.join(dupes)}."
+                " Each object becomes a model, so names must be unique."
+            )
+        if tables is not None:
+            unknown = [t for t in tables if t not in names]
+            if unknown:
+                raise ContractError(
+                    f"Unknown table(s): {', '.join(unknown)}. Objects in"
+                    f" this contract: {', '.join(names)}."
+                )
+            schemas = [o for o in schemas if str(o.get("name")) in tables]
 
-        bq = _bigquery_server(doc.get("servers") or [])
+        server = _select_server(doc.get("servers") or [], server_name)
+        project, dataset = get_dialect(server["type"]).source_location(server)
+        return [
+            cls._from_object(doc, obj, server, project, dataset)
+            for obj in schemas
+        ]
+
+    @classmethod
+    def _from_object(
+        cls,
+        doc: dict[str, Any],
+        obj: dict[str, Any],
+        server: dict[str, Any],
+        project: str,
+        dataset: str,
+    ) -> EventContract:
+        props = obj.get("properties") or []
         table = obj.get("physicalName") or obj.get("name")
         if not table:
             raise ContractError(
@@ -449,6 +580,7 @@ class EventContract:
             raise ContractError(
                 "Schema customProperties must set modelgenLoadedAtField"
                 " to the source column used for incremental loads."
+                f" Object: {obj.get('name')}."
             )
 
         return cls(
@@ -457,9 +589,11 @@ class EventContract:
             unique_key=_unique_key_from_properties(props),
             loaded_at_field=loaded_at,
             source=SourceRef(
-                project=bq.get("project", ""),
-                dataset=bq.get("dataset", ""),
+                project=project,
+                dataset=dataset,
                 table=table,
+                server_type=server["type"],
+                server_format=str(server.get("format") or ""),
             ),
             raw=RawConfig.from_raw(cfg.get("modelgenRaw")),
             staging=StagingConfig.from_raw(
@@ -468,4 +602,35 @@ class EventContract:
             ),
             subject_field=cfg.get("modelgenSubjectField") or "",
             exemptions=_exemptions(obj),
+            contract_name=str(doc.get("name") or obj["name"]),
+            contract_version=str(doc.get("version") or ""),
         )
+
+
+def _load_doc(text: str, source: str) -> dict[str, Any]:
+    """Parse YAML and check it is a valid ODCS DataContract."""
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise ContractError(f"Failed to parse YAML at {source}: {e}") from e
+
+    if not isinstance(doc, dict):
+        raise ContractError(
+            f"Contract root must be a mapping, got {type(doc).__name__}"
+        )
+
+    errors = odcs_schema_errors(doc)
+    if errors:
+        first = errors[0]
+        loc = "/".join(str(p) for p in first.path) or "<root>"
+        raise ContractError(
+            f"Contract at {source} is not valid ODCS"
+            f" ({len(errors)} error(s)). First at {loc}:"
+            f" {first.message}"
+        )
+
+    if doc.get("kind") != "DataContract":
+        raise ContractError(
+            f"kind must be 'DataContract', got {doc.get('kind')!r}."
+        )
+    return doc

@@ -18,19 +18,19 @@ from dataclasses import dataclass, replace
 from enum import Enum
 
 from modelgen.contract import (
+    _SNAPSHOT_PARTITION,
     SNAPSHOT_PARTITION_FIELD,
     SNAPSHOT_STRATEGY,
     EventContract,
     StagingColumn,
     StagingConfig,
 )
+from modelgen.dialect import get_dialect
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EVENT_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
-_PROJECT = re.compile(r"^[a-z][a-z0-9-]*$")
 
 _INCREMENTAL_STRATEGIES = {"merge", "insert_overwrite", "microbatch"}
-_MATERIALIZATIONS = {"snapshot", "incremental"}
 _CLASSIFICATIONS = {"pii", "psi"}
 _PARTITION_DATA_TYPES = {"timestamp", "date", "datetime", "int64"}
 _PARTITION_GRANULARITIES = {"hour", "day", "month", "year"}
@@ -40,34 +40,6 @@ _FRESHNESS_PERIODS = {"minute", "hour", "day"}
 # A description shorter than this is a placeholder, not documentation. The
 # floor is calibrated for readers who did not write the model.
 _MIN_DESCRIPTION_LENGTH = 50
-
-# Standard types plus the aliases BigQuery accepts (INT/DECIMAL family).
-_BQ_TYPES = {
-    "STRING",
-    "BYTES",
-    "INT64",
-    "INT",
-    "SMALLINT",
-    "INTEGER",
-    "BIGINT",
-    "TINYINT",
-    "BYTEINT",
-    "FLOAT64",
-    "FLOAT",
-    "NUMERIC",
-    "DECIMAL",
-    "BIGNUMERIC",
-    "BIGDECIMAL",
-    "BOOL",
-    "BOOLEAN",
-    "TIMESTAMP",
-    "DATE",
-    "TIME",
-    "DATETIME",
-    "GEOGRAPHY",
-    "JSON",
-    "INTERVAL",
-}
 
 
 class Severity(str, Enum):
@@ -92,14 +64,6 @@ class Finding:
         return bool(self.exempt_reason)
 
 
-def _valid_bq_type(raw: str) -> bool:
-    t = raw.strip().upper()
-    if t.startswith(("ARRAY<", "STRUCT<")) and t.endswith(">"):
-        return True
-    base = re.split(r"[(<]", t, maxsplit=1)[0].strip()
-    return base in _BQ_TYPES
-
-
 def lint_contract(contract: EventContract) -> list[Finding]:
     """Run every semantic check against a parsed contract.
 
@@ -117,11 +81,16 @@ def lint_contract(contract: EventContract) -> list[Finding]:
             " and a filename.",
         )
 
-    if not _PROJECT.match(contract.source.project):
+    dialect = get_dialect(contract.source.server_type)
+    if not dialect.validate_project(contract.source.project):
+        what = (
+            "a valid GCP project id"
+            if dialect.name == "bigquery"
+            else f"a valid {dialect.display_name} source"
+        )
         err(
             "invalid-source-project",
-            f"source.project {contract.source.project!r} is not a"
-            " valid GCP project id.",
+            f"source.project {contract.source.project!r} is not {what}.",
         )
     for label, value in [
         ("dataset", contract.source.dataset),
@@ -130,8 +99,8 @@ def lint_contract(contract: EventContract) -> list[Finding]:
         if not _IDENTIFIER.match(value):
             err(
                 f"invalid-source-{label}",
-                f"source.{label} {value!r} is not a valid BigQuery"
-                " identifier.",
+                f"source.{label} {value!r} is not a valid"
+                f" {dialect.display_name} identifier.",
             )
 
     for key in contract.unique_key:
@@ -224,15 +193,48 @@ def _lint_exemptions(contract: EventContract) -> list[Finding]:
 
 def _lint_layer_config(layer: str, contract: EventContract) -> list[Finding]:
     cfg = contract.raw if layer == "raw" else contract.staging
+    dialect = get_dialect(contract.source.server_type)
     findings: list[Finding] = []
     err = _appender(findings, Severity.ERROR)
 
     if not _IDENTIFIER.match(cfg.dataset):
         err(
             f"invalid-{layer}-dataset",
-            f"{layer}.dataset {cfg.dataset!r} is not a valid BigQuery"
-            " identifier.",
+            f"{layer}.dataset {cfg.dataset!r} is not a valid"
+            f" {dialect.display_name} identifier.",
         )
+
+    if not dialect.has_partition_column():
+        # No incremental strategy, partition or clustering exists here, so
+        # none of the BigQuery checks below apply; reject what cannot be
+        # honoured instead of ignoring it. A snapshot's derived ds
+        # partition is not something the contract declared.
+        derived = layer == "staging" and contract.staging.is_snapshot
+        if cfg.partition_by is not None and not (
+            derived and cfg.partition_by == _SNAPSHOT_PARTITION
+        ):
+            err(
+                "dialect-unsupported-config",
+                f"{layer}.partitionBy is declared, but the"
+                f" {dialect.display_name} dialect has no partitions.",
+            )
+        if cfg.cluster_by:
+            err(
+                "dialect-unsupported-config",
+                f"{layer}.clusterBy is declared, but the"
+                f" {dialect.display_name} dialect has no clustering.",
+            )
+        if layer == "raw" and contract.raw.materialization not in (
+            "",
+            "view",
+            "table",
+        ):
+            err(
+                "invalid-raw-materialization",
+                f"raw.materialization {contract.raw.materialization!r}"
+                " must be 'view' or 'table'.",
+            )
+        return findings
 
     if cfg.incremental_strategy not in _INCREMENTAL_STRATEGIES:
         err(
@@ -282,15 +284,17 @@ def _lint_staging_materialization(
     findings: list[Finding] = []
     err = _appender(findings, Severity.ERROR)
 
-    if staging.materialization not in _MATERIALIZATIONS:
+    dialect = get_dialect(contract.source.server_type)
+    allowed = dialect.staging_materializations()
+    if staging.materialization not in allowed:
         err(
             "invalid-staging-materialization",
             f"staging.materialization {staging.materialization!r} must be"
-            f" one of {sorted(_MATERIALIZATIONS)}.",
+            f" one of {sorted(allowed)}.",
         )
         return findings
 
-    if not staging.is_snapshot:
+    if not staging.is_snapshot or not dialect.has_partition_column():
         return findings
 
     if staging.incremental_strategy != SNAPSHOT_STRATEGY:
@@ -345,6 +349,7 @@ def _lint_staging_columns(contract: EventContract) -> list[Finding]:
         return findings
     err = _appender(findings, Severity.ERROR)
     warn = _appender(findings, Severity.WARNING)
+    dialect = get_dialect(contract.source.server_type)
 
     seen_sources: set[str] = set()
     seen_names: set[str] = set()
@@ -373,11 +378,11 @@ def _lint_staging_columns(contract: EventContract) -> list[Finding]:
             )
         seen_names.add(col.name)
 
-        if col.type and not _valid_bq_type(col.type):
+        if col.type and not dialect.is_valid_physical_type(col.type):
             err(
                 "invalid-column-type",
                 f"staging column {col.name!r} casts to {col.type!r},"
-                " which is not a BigQuery type.",
+                f" which is not a {dialect.display_name} type.",
                 column=col.name,
             )
         if not col.description:
@@ -402,7 +407,7 @@ def _lint_staging_columns(contract: EventContract) -> list[Finding]:
     # loaded_at_field aren't among them, the generated config and
     # incremental filter reference columns the model doesn't produce.
     staging_names = {c.name for c in staging.columns}
-    if staging.is_snapshot:
+    if staging.is_snapshot and dialect.has_partition_column():
         staging_names.add(SNAPSHOT_PARTITION_FIELD)
     for key in contract.unique_key:
         if key not in seen_sources:
@@ -420,7 +425,7 @@ def _lint_staging_columns(contract: EventContract) -> list[Finding]:
             " would reference a column the model never selects.",
         )
 
-    if staging.partition_by is not None:
+    if staging.partition_by is not None and dialect.has_partition_column():
         if staging.partition_by.field not in staging_names:
             err(
                 "partition-field-not-in-staging",
@@ -503,6 +508,14 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
     findings: list[Finding] = []
     err = _appender(findings, Severity.ERROR)
     warn = _appender(findings, Severity.WARNING)
+
+    dialect = get_dialect(contract.source.server_type)
+    if contract.encrypts and not dialect.supports_encryption():
+        err(
+            "dialect-unsupported-config",
+            f"classified properties need encryption, which the"
+            f" {dialect.display_name} dialect does not support.",
+        )
 
     for col in staging.columns:
         if col.classification and col.classification not in _CLASSIFICATIONS:

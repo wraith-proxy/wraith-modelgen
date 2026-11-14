@@ -1,3 +1,4 @@
+-- {{ header }}
 /*
   {{ event.staging_model_name }}.sql
   Consumption Data Product: raw -> staging
@@ -22,7 +23,6 @@
 {% endif %}
 
   Upstream: {{ event.raw_model_name }}
-  Contract: {{ contract_path }}
 */
 
 {{ dbt_config }}

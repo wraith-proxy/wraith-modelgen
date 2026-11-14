@@ -17,6 +17,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from modelgen.dialect import get_dialect
+
 logger = logging.getLogger(__name__)
 
 
@@ -148,18 +150,23 @@ class ContractIntrospector:
     def get_columns(
         self, project: str, dataset: str, table: str
     ) -> list[IntrospectedColumn]:
+        default_type = get_dialect(
+            self._contract.source.server_type
+        ).string_type()
         seen: dict[str, IntrospectedColumn] = {}
         for col in self._contract.staging.columns:
             seen[col.source] = IntrospectedColumn(
                 name=col.source,
-                field_type=col.type if col.type else "STRING",
+                field_type=col.type if col.type else default_type,
                 description=col.description,
             )
         for name in list(self._contract.unique_key) + [
             self._contract.loaded_at_field
         ]:
             if name not in seen:
-                seen[name] = IntrospectedColumn(name=name, field_type="STRING")
+                seen[name] = IntrospectedColumn(
+                    name=name, field_type=default_type
+                )
         return list(seen.values())
 
 
