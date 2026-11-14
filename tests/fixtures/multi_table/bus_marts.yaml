@@ -1,0 +1,170 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: 9f2c4b10-5d6e-4a33-b0c1-6e8a5d3f1c47
+name: wraith_bus_ingestor_marts
+version: 3.1.1
+status: draft
+
+servers:
+  - server: marts-docs
+    type: custom
+    description: Documentation-only entry; no dialect answers to it.
+  - server: marts-prod
+    type: duckdb
+    database: ./dbt/wraith_bus_ingestor.duckdb
+    schema: main
+    environment: prod
+  - server: marts-replica
+    type: duckdb
+    database: ./dbt/replica.duckdb
+    schema: replica
+    environment: dev
+
+schema:
+  - id: mart_eta_model_obj
+    name: eta_models
+    physicalName: eta_models
+    logicalType: object
+    physicalType: table
+    description: Fitted travel time model, one row per temporal grain.
+    customProperties:
+      - property: modelgenLoadedAtField
+        value: computed_at
+      - property: modelgenStaging
+        value:
+          materialization: table
+    properties:
+      - name: operator
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 1
+        required: true
+      - name: line
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 2
+        required: true
+      - name: direction
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 3
+        required: true
+      - name: day_type
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 4
+        required: true
+      - name: hour_band
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 5
+        required: true
+      - name: slope_s_per_km
+        logicalType: number
+        physicalType: DOUBLE
+      - name: intercept_s
+        logicalType: number
+        physicalType: DOUBLE
+      - name: r2
+        logicalType: number
+        physicalType: DOUBLE
+      - name: n_obs
+        logicalType: integer
+        physicalType: BIGINT
+      - name: mean_speed_kmh
+        logicalType: number
+        physicalType: DOUBLE
+      - name: computed_at
+        logicalType: timestamp
+        physicalType: TIMESTAMP
+        required: true
+  - id: mart_localities_obj
+    name: localities
+    physicalName: localities
+    logicalType: object
+    physicalType: table
+    description: Every settlement that has a bus stop.
+    customProperties:
+      - property: modelgenLoadedAtField
+        value: computed_at
+      - property: modelgenStaging
+        value:
+          materialization: table
+    properties:
+      - name: locality_norm
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 1
+        required: true
+      - name: locality
+        logicalType: string
+        physicalType: VARCHAR
+      - name: lat
+        logicalType: number
+        physicalType: DOUBLE
+      - name: lon
+        logicalType: number
+        physicalType: DOUBLE
+      - name: n_stops
+        logicalType: integer
+        physicalType: BIGINT
+      - name: computed_at
+        logicalType: timestamp
+        physicalType: TIMESTAMP
+        required: true
+  - id: mart_line_punctuality_obj
+    name: line_punctuality
+    physicalName: line_punctuality
+    logicalType: object
+    physicalType: table
+    description: Observed punctuality by line, direction and time band.
+    customProperties:
+      - property: modelgenLoadedAtField
+        value: computed_at
+      - property: modelgenStaging
+        value:
+          materialization: table
+    properties:
+      - name: line
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 1
+        required: true
+      - name: direction
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 2
+        required: true
+      - name: day_type
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 3
+        required: true
+      - name: hour_band
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 4
+        required: true
+      - name: median_delay_s
+        logicalType: number
+        physicalType: DOUBLE
+      - name: p90_delay_s
+        logicalType: number
+        physicalType: DOUBLE
+      - name: n_journeys
+        logicalType: integer
+        physicalType: BIGINT
+      - name: computed_at
+        logicalType: timestamp
+        physicalType: TIMESTAMP
+        required: true

@@ -9,6 +9,8 @@ because staging absorbs the drift.
 ODCS is a general standard; modelgen reads the subset it needs and carries
 its BigQuery/dbt specifics in ODCS `customProperties`:
 
+  schema[]                   -> one raw + one staging model per object, in
+                                contract order (`from_file_all`)
   schema[].name              -> event name (dbt model stem)
   schema[].physicalName      -> source table
   servers[bigquery]          -> source project + dataset
@@ -390,12 +392,34 @@ def _exemptions(obj: dict) -> list[Exemption]:
     ]
 
 
-def _select_server(servers: list[dict]) -> dict:
-    """The first server whose `type` a registered dialect answers to.
+def _select_server(servers: list[dict], name: str | None = None) -> dict:
+    """Pick the server to generate against.
+
+    With `name`, the server whose `server:` id matches; it must be of a
+    supported type. Without, the first server whose `type` a registered
+    dialect answers to (contract order).
 
     dialect.py imports contract.py only for type checking, so this module
     can use `get_dialect` directly.
     """
+    if name is not None:
+        ids = [str(s.get("server")) for s in servers]
+        for s in servers:
+            if str(s.get("server")) != name:
+                continue
+            try:
+                get_dialect(str(s.get("type", "")))
+            except UnknownDialectError as e:
+                raise ContractError(
+                    f"Server {name!r} has type {s.get('type')!r}, which no"
+                    f" dialect supports. Supported dialects:"
+                    f" {', '.join(supported_server_types())}."
+                ) from e
+            return s
+        raise ContractError(
+            f"No server named {name!r}. Servers in this contract:"
+            f" {', '.join(ids) or 'none'}."
+        )
     for s in servers:
         try:
             get_dialect(str(s.get("type", "")))
@@ -454,45 +478,92 @@ class EventContract:
         return cls.from_text(path.read_text(), source=str(path))
 
     @classmethod
+    def from_file_all(
+        cls,
+        path: Path,
+        *,
+        server: str | None = None,
+        tables: list[str] | None = None,
+    ) -> list[EventContract]:
+        return cls.from_text_all(
+            path.read_text(), source=str(path), server=server, tables=tables
+        )
+
+    @classmethod
     def from_text(cls, text: str, source: str = "<string>") -> EventContract:
-        try:
-            doc = yaml.safe_load(text)
-        except yaml.YAMLError as e:
+        """Parse a contract that describes exactly one table."""
+        doc = _load_doc(text, source)
+        count = len(doc.get("schema") or [])
+        if count != 1:
             raise ContractError(
-                f"Failed to parse YAML at {source}: {e}"
-            ) from e
-
-        if not isinstance(doc, dict):
-            raise ContractError(
-                f"Contract root must be a mapping, got {type(doc).__name__}"
+                "Expected exactly one schema object, got"
+                f" {count}. Use from_text_all for multi-table contracts."
             )
+        return cls._from_doc(doc)[0]
 
-        errors = odcs_schema_errors(doc)
-        if errors:
-            first = errors[0]
-            loc = "/".join(str(p) for p in first.path) or "<root>"
-            raise ContractError(
-                f"Contract at {source} is not valid ODCS"
-                f" ({len(errors)} error(s)). First at {loc}:"
-                f" {first.message}"
-            )
+    @classmethod
+    def from_text_all(
+        cls,
+        text: str,
+        source: str = "<string>",
+        *,
+        server: str | None = None,
+        tables: list[str] | None = None,
+    ) -> list[EventContract]:
+        """One EventContract per schema object, in contract order.
 
-        if doc.get("kind") != "DataContract":
-            raise ContractError(
-                f"kind must be 'DataContract', got {doc.get('kind')!r}."
-            )
+        `server` picks a server by its `server:` id (default: the first
+        server of a supported type). `tables` limits the result to the
+        named objects; the order stays the contract's, not the caller's.
+        """
+        return cls._from_doc(_load_doc(text, source), server, tables)
 
+    @classmethod
+    def _from_doc(
+        cls,
+        doc: dict[str, Any],
+        server_name: str | None = None,
+        tables: list[str] | None = None,
+    ) -> list[EventContract]:
         schemas = doc.get("schema") or []
-        if len(schemas) != 1:
+        if not schemas:
             raise ContractError(
-                "modelgen contracts describe exactly one table:"
-                f" expected one schema object, got {len(schemas)}."
+                "Contract declares no schema objects. Add at least one"
+                " entry under schema:."
             )
-        obj = schemas[0]
-        props = obj.get("properties") or []
+        names = [str(o.get("name")) for o in schemas]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ContractError(
+                f"Duplicate schema object name(s): {', '.join(dupes)}."
+                " Each object becomes a model, so names must be unique."
+            )
+        if tables is not None:
+            unknown = [t for t in tables if t not in names]
+            if unknown:
+                raise ContractError(
+                    f"Unknown table(s): {', '.join(unknown)}. Objects in"
+                    f" this contract: {', '.join(names)}."
+                )
+            schemas = [o for o in schemas if str(o.get("name")) in tables]
 
-        server = _select_server(doc.get("servers") or [])
+        server = _select_server(doc.get("servers") or [], server_name)
         project, dataset = get_dialect(server["type"]).source_location(server)
+        return [
+            cls._from_object(doc, obj, server, project, dataset)
+            for obj in schemas
+        ]
+
+    @classmethod
+    def _from_object(
+        cls,
+        doc: dict[str, Any],
+        obj: dict[str, Any],
+        server: dict[str, Any],
+        project: str,
+        dataset: str,
+    ) -> EventContract:
+        props = obj.get("properties") or []
         table = obj.get("physicalName") or obj.get("name")
         if not table:
             raise ContractError(
@@ -505,6 +576,7 @@ class EventContract:
             raise ContractError(
                 "Schema customProperties must set modelgenLoadedAtField"
                 " to the source column used for incremental loads."
+                f" Object: {obj.get('name')}."
             )
 
         return cls(
@@ -529,3 +601,32 @@ class EventContract:
             contract_name=str(doc.get("name") or obj["name"]),
             contract_version=str(doc.get("version") or ""),
         )
+
+
+def _load_doc(text: str, source: str) -> dict[str, Any]:
+    """Parse YAML and check it is a valid ODCS DataContract."""
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise ContractError(f"Failed to parse YAML at {source}: {e}") from e
+
+    if not isinstance(doc, dict):
+        raise ContractError(
+            f"Contract root must be a mapping, got {type(doc).__name__}"
+        )
+
+    errors = odcs_schema_errors(doc)
+    if errors:
+        first = errors[0]
+        loc = "/".join(str(p) for p in first.path) or "<root>"
+        raise ContractError(
+            f"Contract at {source} is not valid ODCS"
+            f" ({len(errors)} error(s)). First at {loc}:"
+            f" {first.message}"
+        )
+
+    if doc.get("kind") != "DataContract":
+        raise ContractError(
+            f"kind must be 'DataContract', got {doc.get('kind')!r}."
+        )
+    return doc

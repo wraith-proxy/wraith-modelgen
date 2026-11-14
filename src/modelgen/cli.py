@@ -12,7 +12,12 @@ from rich.table import Table
 
 from modelgen import __version__
 from modelgen.contract import ContractError, EventContract
-from modelgen.generator import GenerationError, Layer, generate
+from modelgen.generator import (
+    GenerationError,
+    GenerationResult,
+    Layer,
+    generate,
+)
 from modelgen.introspect import IntrospectionError
 from modelgen.lint import Finding, lint_contract
 from modelgen.lint import errors as lint_errors
@@ -77,6 +82,26 @@ def _lint_errors(event: EventContract) -> list[Finding]:
     return lint_errors(lint_contract(event))
 
 
+_TABLE_OPTION = typer.Option(
+    None,
+    "--table",
+    "-t",
+    help=(
+        "Only generate the named schema object. Repeatable. Output keeps"
+        " contract order. Default: every object in the contract."
+    ),
+)
+_SERVER_OPTION = typer.Option(
+    None,
+    "--server",
+    "-s",
+    help=(
+        "Select the contract server by its `server:` id. Default: the"
+        " first server whose type modelgen supports."
+    ),
+)
+
+
 def _configure_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
@@ -134,6 +159,8 @@ def gen(
             " credentials are unavailable."
         ),
     ),
+    table: list[str] | None = _TABLE_OPTION,
+    server: str | None = _SERVER_OPTION,
 ):
     """
     Generate a dbt model layer from a YAML data contract.
@@ -150,6 +177,10 @@ def gen(
         modelgen gen contract.yml --staging -o ./models/staging
         modelgen gen contract.yml --raw --dry-run
         modelgen gen contract.yml --raw --from-contract
+        modelgen gen contract.yml --raw --table eta_models --server prod
+
+    A contract with several schema objects generates one model per object,
+    in contract order.
     """
     _configure_logging(verbose)
 
@@ -160,16 +191,23 @@ def gen(
     layer = Layer.RAW if raw else Layer.STAGING
 
     try:
-        event = EventContract.from_file(contract)
+        events = EventContract.from_file_all(
+            contract, server=server, tables=table
+        )
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
         raise typer.Exit(1)
 
-    lint_errs = _lint_errors(event)
-    if lint_errs:
-        _print_findings(lint_errs)
+    failed = 0
+    for event in events:
+        lint_errs = _lint_errors(event)
+        if lint_errs:
+            console.print(f"[bold]{event.name}[/bold]")
+            _print_findings(lint_errs)
+            failed += len(lint_errs)
+    if failed:
         console.print(
-            f"[red]Contract failed lint with {len(lint_errs)}"
+            f"[red]Contract failed lint with {failed}"
             " error(s).[/red] Run [bold]modelgen validate[/bold]"
             " for the full report."
         )
@@ -181,87 +219,106 @@ def gen(
         has_default_credentials,
     )
 
-    if from_contract or not has_default_credentials():
-        if not from_contract:
-            console.print(
-                "[yellow]No GCP credentials found."
-                " Generating from contract only.[/yellow]"
-            )
-        introspector = ContractIntrospector(event)
-        mode_subtitle = "contract-only mode"
-    else:
-        introspector = BigQueryIntrospector()
-        mode_subtitle = "introspecting BigQuery…"
-
-    target_dataset = (
-        event.raw.dataset if layer == Layer.RAW else event.staging.dataset
-    )
-    target_model = (
-        event.raw_model_name
-        if layer == Layer.RAW
-        else event.staging_model_name
-    )
-
-    console.print(
-        Panel(
-            f"[bold]Event:[/bold]      {event.name}\n"
-            f"[bold]Layer:[/bold]      {layer.value}\n"
-            f"[bold]Source:[/bold]     {event.source.fqn}\n"
-            f"[bold]Target:[/bold]     {target_dataset}.{target_model}\n"
-            f"[bold]Unique key:[/bold] {', '.join(event.unique_key)}"
-            f"  [bold]Loaded at:[/bold] {event.loaded_at_field}",
-            title="[bold green]👻 modelgen[/bold green]",
-            subtitle=f"[dim]{mode_subtitle}[/dim]",
-            expand=False,
-        )
-    )
-
-    try:
-        result = generate(
-            contract=event,
-            introspector=introspector,
-            output_dir=output,
-            layer=layer,
-            dry_run=dry_run,
-        )
-    except (GenerationError, IntrospectionError) as e:
-        console.print(f"[red]Generation failed:[/red] {e}")
+    use_contract = from_contract or not has_default_credentials()
+    if use_contract and not from_contract:
         console.print(
-            "[dim]Fix the contract or the source. Then try again.[/dim]"
+            "[yellow]No GCP credentials found."
+            " Generating from contract only.[/yellow]"
         )
-        raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[red]Unexpected error:[/red] {type(e).__name__}: {e}")
-        console.print(
-            "[dim]This looks like a bug."
-            " Run with --verbose for the full traceback.[/dim]"
-        )
-        if verbose:
-            console.print_exception()
-        raise typer.Exit(1)
+    mode_subtitle = (
+        "contract-only mode" if use_contract else "introspecting BigQuery…"
+    )
+    shared_introspector = None if use_contract else BigQueryIntrospector()
 
-    table = Table(show_header=True, header_style="bold cyan")
-    table.add_column("File")
-    table.add_column("Status")
-    for path in result.written:
-        status = (
-            "[yellow]dry-run[/yellow]" if dry_run else "[green]written[/green]"
+    results: list[tuple[EventContract, GenerationResult]] = []
+    for event in events:
+        introspector = (
+            ContractIntrospector(event)
+            if use_contract
+            else shared_introspector
         )
-        table.add_row(str(path), status)
-    console.print(table)
+        assert introspector is not None
 
-    if result.new_source_columns:
+        target_dataset = (
+            event.raw.dataset if layer == Layer.RAW else event.staging.dataset
+        )
+        target_model = (
+            event.raw_model_name
+            if layer == Layer.RAW
+            else event.staging_model_name
+        )
+
         console.print(
             Panel(
-                f"[bold]{len(result.new_source_columns)} new source column(s)"
-                " not yet in staging:[/bold]\n"
-                f"  [cyan]{', '.join(result.new_source_columns)}[/cyan]\n\n"
-                "[dim]Flowing through raw automatically."
-                " Add to the staging contract when consumers need them.[/dim]",
-                title="[yellow]⚠ Schema evolution detected[/yellow]",
-                border_style="yellow",
+                f"[bold]Event:[/bold]      {event.name}\n"
+                f"[bold]Layer:[/bold]      {layer.value}\n"
+                f"[bold]Source:[/bold]     {event.source.fqn}\n"
+                f"[bold]Target:[/bold]     {target_dataset}.{target_model}\n"
+                f"[bold]Unique key:[/bold] {', '.join(event.unique_key)}"
+                f"  [bold]Loaded at:[/bold] {event.loaded_at_field}",
+                title="[bold green]👻 modelgen[/bold green]",
+                subtitle=f"[dim]{mode_subtitle}[/dim]",
+                expand=False,
             )
         )
+
+        try:
+            result = generate(
+                contract=event,
+                introspector=introspector,
+                output_dir=output,
+                layer=layer,
+                dry_run=dry_run,
+            )
+        except (GenerationError, IntrospectionError) as e:
+            console.print(f"[red]Generation failed ({event.name}):[/red] {e}")
+            console.print(
+                "[dim]Fix the contract or the source. Then try again.[/dim]"
+            )
+            raise typer.Exit(1)
+        except Exception as e:
+            console.print(
+                f"[red]Unexpected error ({event.name}):[/red]"
+                f" {type(e).__name__}: {e}"
+            )
+            console.print(
+                "[dim]This looks like a bug."
+                " Run with --verbose for the full traceback.[/dim]"
+            )
+            if verbose:
+                console.print_exception()
+            raise typer.Exit(1)
+        results.append((event, result))
+
+    table_out = Table(show_header=True, header_style="bold cyan")
+    table_out.add_column("File")
+    table_out.add_column("Status")
+    for _, result in results:
+        for path in result.written:
+            status = (
+                "[yellow]dry-run[/yellow]"
+                if dry_run
+                else "[green]written[/green]"
+            )
+            table_out.add_row(str(path), status)
+    console.print(table_out)
+
+    for event, result in results:
+        if result.new_source_columns:
+            console.print(
+                Panel(
+                    f"[bold]{event.name}:"
+                    f" {len(result.new_source_columns)} new source"
+                    " column(s) not yet in staging:[/bold]\n"
+                    f"  [cyan]{', '.join(result.new_source_columns)}"
+                    "[/cyan]\n\n"
+                    "[dim]Flowing through raw automatically."
+                    " Add to the staging contract when consumers need"
+                    " them.[/dim]",
+                    title="[yellow]⚠ Schema evolution detected[/yellow]",
+                    border_style="yellow",
+                )
+            )
 
 
 @app.command()
@@ -277,6 +334,7 @@ def validate(
         "--strict",
         help="Treat warnings as errors. For CI gates with standards.",
     ),
+    server: str | None = _SERVER_OPTION,
 ):
     """
     Validate a contract offline: structure first, then semantics.
@@ -285,38 +343,44 @@ def validate(
     types and strategies, duplicate or unsafe column declarations, and
     staging configs that reference columns the model never selects,
     all in one pass, before you spend a round-trip to BigQuery.
+    Every schema object in the contract is validated.
     """
     try:
-        event = EventContract.from_file(contract)
+        events = EventContract.from_file_all(contract, server=server)
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
         raise typer.Exit(1)
 
-    findings = lint_contract(event)
-    _print_findings(findings)
-    errs = lint_errors(findings)
-    warns = lint_warnings(findings)
-    # Neither count includes exemptions, so a clean run with standing
-    # exemptions must not read as a clean bill of health.
-    exempt = sum(1 for f in findings if f.exempted)
-    exempt_note = f", {exempt} exempt" if exempt else ""
+    failed = False
+    for event in events:
+        findings = lint_contract(event)
+        _print_findings(findings)
+        errs = lint_errors(findings)
+        warns = lint_warnings(findings)
+        # Neither count includes exemptions, so a clean run with standing
+        # exemptions must not read as a clean bill of health.
+        exempt = sum(1 for f in findings if f.exempted)
+        exempt_note = f", {exempt} exempt" if exempt else ""
 
-    if errs or (strict and warns):
+        if errs or (strict and warns):
+            failed = True
+            console.print(
+                f"[red]FAIL[/red] [bold]{event.name}[/bold]:"
+                f" {len(errs)} error(s), {len(warns)} warning(s)"
+                f"{exempt_note}"
+                + (" [dim](--strict)[/dim]" if strict and not errs else "")
+            )
+            continue
+
         console.print(
-            f"[red]FAIL[/red] [bold]{event.name}[/bold]:"
-            f" {len(errs)} error(s), {len(warns)} warning(s)"
-            f"{exempt_note}"
-            + (" [dim](--strict)[/dim]" if strict and not errs else "")
+            f"[green]OK[/green] [bold]{event.name}[/bold]\n"
+            f"  Source:   {event.source.fqn}\n"
+            f"  Key:      {', '.join(event.unique_key)}\n"
+            f"  Columns:  {len(event.staging.columns)} staging declared\n"
+            f"  Warnings: {len(warns)}{exempt_note}"
         )
+    if failed:
         raise typer.Exit(1)
-
-    console.print(
-        f"[green]OK[/green] [bold]{event.name}[/bold]\n"
-        f"  Source:   {event.source.fqn}\n"
-        f"  Key:      {', '.join(event.unique_key)}\n"
-        f"  Columns:  {len(event.staging.columns)} staging declared\n"
-        f"  Warnings: {len(warns)}{exempt_note}"
-    )
 
 
 @app.command()
@@ -346,6 +410,7 @@ def run(
             " column list come from each contract's staging declarations."
         ),
     ),
+    server: str | None = _SERVER_OPTION,
 ):
     """
     Find all contracts and regenerate every layer.
@@ -431,73 +496,82 @@ def run(
 
     for contract_path in contract_files:
         try:
-            event = EventContract.from_file(contract_path)
+            events = EventContract.from_file_all(contract_path, server=server)
         except ContractError as e:
             errors.append((contract_path.name, "parse", str(e)))
             continue
 
-        lint_errs = _lint_errors(event)
-        if lint_errs:
-            errors.append(
-                (
-                    contract_path.name,
-                    "lint",
-                    "; ".join(f.message for f in lint_errs),
+        for event in events:
+            label = (
+                contract_path.name
+                if len(events) == 1
+                else f"{contract_path.name}:{event.name}"
+            )
+
+            lint_errs = _lint_errors(event)
+            if lint_errs:
+                errors.append(
+                    (
+                        label,
+                        "lint",
+                        "; ".join(f.message for f in lint_errs),
+                    )
                 )
-            )
-            continue
+                continue
 
-        introspector = (
-            ContractIntrospector(event)
-            if use_contract_introspection
-            else shared_introspector
-        )
-        assert introspector is not None
+            introspector = (
+                ContractIntrospector(event)
+                if use_contract_introspection
+                else shared_introspector
+            )
+            assert introspector is not None
 
-        # Raw layer
-        try:
-            raw_result = generate(
-                contract=event,
-                introspector=introspector,
-                output_dir=cfg.raw_output,
-                layer=Layer.RAW,
-                dry_run=dry_run,
-            )
-            status = (
-                "[yellow]dry-run[/yellow]"
-                if dry_run
-                else "[green]written[/green]"
-            )
-            for p in raw_result.written:
-                table.add_row(contract_path.name, "raw", p.name, status)
-        except (GenerationError, IntrospectionError) as e:
-            errors.append((contract_path.name, "raw", str(e)))
-
-        # Staging layer: skip if no columns declared
-        if not event.staging.columns:
-            continue
-
-        try:
-            stg_result = generate(
-                contract=event,
-                introspector=introspector,
-                output_dir=cfg.staging_output,
-                layer=Layer.STAGING,
-                dry_run=dry_run,
-            )
-            status = (
-                "[yellow]dry-run[/yellow]"
-                if dry_run
-                else "[green]written[/green]"
-            )
-            for p in stg_result.written:
-                table.add_row(contract_path.name, "staging", p.name, status)
-            if stg_result.new_source_columns:
-                new_cols_notices.append(
-                    (event.name, stg_result.new_source_columns)
+            # Raw layer
+            try:
+                raw_result = generate(
+                    contract=event,
+                    introspector=introspector,
+                    output_dir=cfg.raw_output,
+                    layer=Layer.RAW,
+                    dry_run=dry_run,
                 )
-        except (GenerationError, IntrospectionError) as e:
-            errors.append((contract_path.name, "staging", str(e)))
+                status = (
+                    "[yellow]dry-run[/yellow]"
+                    if dry_run
+                    else "[green]written[/green]"
+                )
+                for p in raw_result.written:
+                    table.add_row(contract_path.name, "raw", p.name, status)
+            except (GenerationError, IntrospectionError) as e:
+                errors.append((label, "raw", str(e)))
+
+            # Staging layer: skip if no columns declared
+            if not event.staging.columns:
+                continue
+
+            try:
+                stg_result = generate(
+                    contract=event,
+                    introspector=introspector,
+                    output_dir=cfg.staging_output,
+                    layer=Layer.STAGING,
+                    dry_run=dry_run,
+                )
+                status = (
+                    "[yellow]dry-run[/yellow]"
+                    if dry_run
+                    else "[green]written[/green]"
+                )
+                for p in stg_result.written:
+                    table.add_row(
+                        contract_path.name, "staging", p.name, status
+                    )
+                if stg_result.new_source_columns:
+                    new_cols_notices.append(
+                        (event.name, stg_result.new_source_columns)
+                    )
+            except (GenerationError, IntrospectionError) as e:
+                errors.append((label, "staging", str(e)))
 
     console.print(table)
 
@@ -549,6 +623,7 @@ def check(
             " column list come from each contract's staging declarations."
         ),
     ),
+    server: str | None = _SERVER_OPTION,
 ):
     """
     Verify committed models match what the contracts would generate.
@@ -612,60 +687,67 @@ def check(
 
     for contract_path in contract_files:
         try:
-            event = EventContract.from_file(contract_path)
+            events = EventContract.from_file_all(contract_path, server=server)
         except ContractError as e:
             errors.append((contract_path.name, "parse", str(e)))
             continue
 
-        lint_errs = _lint_errors(event)
-        if lint_errs:
-            errors.append(
-                (
-                    contract_path.name,
-                    "lint",
-                    "; ".join(f.message for f in lint_errs),
-                )
+        for event in events:
+            label = (
+                contract_path.name
+                if len(events) == 1
+                else f"{contract_path.name}:{event.name}"
             )
-            continue
 
-        introspector = (
-            ContractIntrospector(event)
-            if use_contract_introspection
-            else shared_introspector
-        )
-        assert introspector is not None
-
-        layers: list[tuple[Layer, Path]] = [(Layer.RAW, cfg.raw_output)]
-        if event.staging.columns:
-            layers.append((Layer.STAGING, cfg.staging_output))
-
-        for layer, output_dir in layers:
-            try:
-                result = generate(
-                    contract=event,
-                    introspector=introspector,
-                    output_dir=output_dir,
-                    layer=layer,
-                    dry_run=True,
+            lint_errs = _lint_errors(event)
+            if lint_errs:
+                errors.append(
+                    (
+                        label,
+                        "lint",
+                        "; ".join(f.message for f in lint_errs),
+                    )
                 )
-            except (GenerationError, IntrospectionError) as e:
-                errors.append((contract_path.name, layer.value, str(e)))
                 continue
 
-            for filename, expected in result.artefacts.items():
-                dest = output_dir / filename
-                if not dest.exists():
-                    drifted.append((dest, "", expected))
-                    status = "[red]missing[/red]"
-                elif dest.read_text() != expected:
-                    drifted.append((dest, dest.read_text(), expected))
-                    status = "[red]drift[/red]"
-                else:
-                    in_sync += 1
-                    status = "[green]in sync[/green]"
-                table.add_row(
-                    contract_path.name, layer.value, filename, status
-                )
+            introspector = (
+                ContractIntrospector(event)
+                if use_contract_introspection
+                else shared_introspector
+            )
+            assert introspector is not None
+
+            layers: list[tuple[Layer, Path]] = [(Layer.RAW, cfg.raw_output)]
+            if event.staging.columns:
+                layers.append((Layer.STAGING, cfg.staging_output))
+
+            for layer, output_dir in layers:
+                try:
+                    result = generate(
+                        contract=event,
+                        introspector=introspector,
+                        output_dir=output_dir,
+                        layer=layer,
+                        dry_run=True,
+                    )
+                except (GenerationError, IntrospectionError) as e:
+                    errors.append((label, layer.value, str(e)))
+                    continue
+
+                for filename, expected in result.artefacts.items():
+                    dest = output_dir / filename
+                    if not dest.exists():
+                        drifted.append((dest, "", expected))
+                        status = "[red]missing[/red]"
+                    elif dest.read_text() != expected:
+                        drifted.append((dest, dest.read_text(), expected))
+                        status = "[red]drift[/red]"
+                    else:
+                        in_sync += 1
+                        status = "[green]in sync[/green]"
+                    table.add_row(
+                        contract_path.name, layer.value, filename, status
+                    )
 
     console.print(table)
 
