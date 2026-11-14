@@ -5,9 +5,7 @@ models:
   - name: {{ event.staging_model_name }}
     description: "Consumption Data Product. Stable contract for {{ event.name }}. Casts and renames here absorb upstream schema drift so downstream FDPs do not break."
     config:
-      materialized: incremental
-      incremental_strategy: {{ event.staging.incremental_strategy }}
-      schema: {{ event.staging.dataset }}
+{{ yml_config }}
     columns:
 {% for col in staging_columns %}
       - name: {{ col.name }}

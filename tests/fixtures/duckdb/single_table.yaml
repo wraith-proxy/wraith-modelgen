@@ -1,0 +1,47 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: 7d2f4c1e-5b8a-4e3d-9c60-2a1b3c4d5e6f
+name: bus_ping_summary
+version: 1.0.0
+status: active
+
+servers:
+  - server: warehouse
+    type: duckdb
+    database: warehouse.duckdb
+    schema: main
+
+schema:
+  - id: bus_ping_summary_obj
+    name: bus_ping_summary
+    physicalName: bus_ping_summary
+    logicalType: object
+    physicalType: table
+    description: One row per bus and bucket with its mean speed and ping count.
+    customProperties:
+      - property: modelgenLoadedAtField
+        value: bucket_end
+      - property: modelgenStaging
+        value:
+          materialization: table
+    properties:
+      - name: vehicle_ref
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 1
+        required: true
+        description: Operator vehicle reference, as BODS publishes it.
+      - name: mean_speed_kmh
+        logicalType: number
+        physicalType: DOUBLE
+        description: Mean speed over the bucket in kilometres per hour.
+      - name: ping_count
+        logicalType: integer
+        physicalType: BIGINT
+        description: Number of position pings that fell in the bucket.
+      - name: bucket_end
+        logicalType: timestamp
+        physicalType: TIMESTAMP
+        required: true
+        description: End of the five minute bucket, in UTC.

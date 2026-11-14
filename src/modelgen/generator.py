@@ -177,12 +177,13 @@ def _plaintext_expr(col: StagingColumn, dialect: Dialect) -> str:
     before it is stringified and a reader gets back what the contract
     promised. A column already cast to STRING needs only the one cast.
     """
-    if col.type.strip().upper() == "STRING":
-        return f"cast({col.source} as STRING)"
+    text = dialect.string_type()
+    if dialect.is_string_type(col.type):
+        return f"cast({col.source} as {text})"
     if col.needs_cast:
         inner = f"cast({col.source} as {dialect.cast_type(col.type)})"
-        return f"cast({inner} as string)"
-    return f"cast({col.source} as string)"
+        return f"cast({inner} as {text.lower()})"
+    return f"cast({col.source} as {text.lower()})"
 
 
 def _transform_expr(
@@ -257,11 +258,15 @@ def render_raw(
     raw_final_cols = _join_cols(col_names, indent=4)
 
     dialect = get_dialect(contract.source.server_type)
+    source_head, source_table_extra = dialect.render_source_yml(contract)
     env = _make_env()
     header = generated_header(contract)
     ctx = {
         "event": contract,
         "header": header,
+        "yml_config": dialect.render_yml_config(contract, "raw"),
+        "source_head": source_head,
+        "source_table_extra": source_table_extra,
         "introspected_columns": cols,
         "freshness": contract.raw.freshness,
         "raw_source_cols": raw_source_cols,
@@ -271,9 +276,13 @@ def render_raw(
         "unique_key_yaml": _render_unique_key_yaml(contract.unique_key),
         "cluster_by_literal": _render_cluster_by(contract.raw.cluster_by),
         "dbt_config": dialect.render_dbt_config(contract, "raw"),
-        "incremental_filter": _render_incremental_filter(
-            loaded_at_field=contract.loaded_at_field,
-            upstream_loaded_at_field=contract.loaded_at_field,
+        "incremental_filter": (
+            _render_incremental_filter(
+                loaded_at_field=contract.loaded_at_field,
+                upstream_loaded_at_field=contract.loaded_at_field,
+            )
+            if dialect.materialization(contract, "raw") == "incremental"
+            else ""
         ),
     }
     return {
@@ -315,7 +324,14 @@ def render_staging(
         )
 
     dialect = get_dialect(contract.source.server_type)
-    snapshot = contract.staging.is_snapshot
+    if contract.encrypts and not dialect.supports_encryption():
+        raise GenerationError(
+            f"The {dialect.display_name} dialect cannot encrypt classified"
+            " columns. Remove the classification or use a BigQuery server."
+        )
+    # A dialect without a partition column has no `ds` to stamp.
+    snapshot = contract.staging.is_snapshot and dialect.has_partition_column()
+    incremental = dialect.materialization(contract, "staging") == "incremental"
     encrypts = contract.encrypts
     raw_cols = _join_cols(
         [c.source for c in contract.staging.columns], indent=8
@@ -334,6 +350,7 @@ def render_staging(
     ctx = {
         "event": contract,
         "header": header,
+        "yml_config": dialect.render_yml_config(contract, "staging"),
         "snapshot": snapshot,
         "staging_columns": [
             _yml_column(c, snapshot) for c in contract.staging.columns
@@ -360,7 +377,7 @@ def render_staging(
         # same-model column is the staging name (post-rename).
         "incremental_filter": (
             ""
-            if snapshot
+            if snapshot or not incremental
             else _render_incremental_filter(
                 loaded_at_field=staging_loaded_at,
                 upstream_loaded_at_field=contract.loaded_at_field,

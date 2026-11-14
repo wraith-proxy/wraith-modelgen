@@ -23,6 +23,7 @@ class UnknownDialectError(ValueError):
 
 class Dialect(Protocol):
     name: str
+    display_name: str  # spelling used in user-facing messages
 
     def server_types(self) -> tuple[str, ...]:
         """ODCS server `type` values this dialect answers to."""
@@ -46,7 +47,46 @@ class Dialect(Protocol):
         ...
 
     def has_partition_column(self) -> bool:
-        """True when the dialect partitions on a table column."""
+        """True when the dialect partitions on a table column. When False
+        no `ds` snapshot column is generated and partitionBy is rejected."""
+        ...
+
+    def source_location(self, server: dict) -> tuple[str, str]:
+        """(project, dataset) for the SourceRef, read off an ODCS server."""
+        ...
+
+    def validate_project(self, project: str) -> bool:
+        """True when `project` is a plausible first-part source name."""
+        ...
+
+    def staging_materializations(self) -> frozenset[str]:
+        """Values accepted for modelgenStaging.materialization."""
+        ...
+
+    def materialization(self, contract: EventContract, layer: str) -> str:
+        """dbt materialization the layer is built with."""
+        ...
+
+    def render_yml_config(self, contract: EventContract, layer: str) -> str:
+        """Indented body of the schema.yml `config:` block, no trailing
+        newline."""
+        ...
+
+    def render_source_yml(self, contract: EventContract) -> tuple[str, str]:
+        """Extra lines for the sources entry: (after the source name, after
+        the table name). Either may be empty. Lines are fully indented."""
+        ...
+
+    def supports_encryption(self) -> bool:
+        """True when classified columns can be encrypted in staging."""
+        ...
+
+    def string_type(self) -> str:
+        """The dialect's text type name."""
+        ...
+
+    def is_string_type(self, physical_type: str) -> bool:
+        """True when `physical_type` is already the dialect's text type."""
         ...
 
 
@@ -73,6 +113,16 @@ def render_cluster_by(cols: list[str]) -> str:
     if len(cols) == 1:
         return f"'{cols[0]}'"
     return "[" + ", ".join(f"'{c}'" for c in cols) + "]"
+
+
+_BQ_PROJECT = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def _unique_key_yaml(keys: list[str]) -> str:
+    """Render a unique_key as a YAML scalar or flow list for schema.yml."""
+    if len(keys) == 1:
+        return keys[0]
+    return "[" + ", ".join(keys) + "]"
 
 
 # Standard types plus the aliases BigQuery accepts (INT/DECIMAL family).
@@ -108,6 +158,7 @@ _BQ_TYPES = frozenset(
 
 class BigQueryDialect:
     name = "bigquery"
+    display_name = "BigQuery"
 
     def server_types(self) -> tuple[str, ...]:
         return ("bigquery",)
@@ -128,6 +179,50 @@ class BigQueryDialect:
 
     def has_partition_column(self) -> bool:
         return True
+
+    def source_location(self, server: dict) -> tuple[str, str]:
+        return server.get("project", ""), server.get("dataset", "")
+
+    def validate_project(self, project: str) -> bool:
+        return bool(_BQ_PROJECT.match(project))
+
+    def staging_materializations(self) -> frozenset[str]:
+        return frozenset({"snapshot", "incremental"})
+
+    def materialization(self, contract: EventContract, layer: str) -> str:
+        return "incremental"
+
+    def render_yml_config(self, contract: EventContract, layer: str) -> str:
+        if layer == "raw":
+            lines = [
+                "      materialized: incremental",
+                "      incremental_strategy:"
+                f" {contract.raw.incremental_strategy}",
+                f"      unique_key: {_unique_key_yaml(contract.unique_key)}",
+                f"      schema: {contract.raw.dataset}",
+            ]
+        elif layer == "staging":
+            lines = [
+                "      materialized: incremental",
+                "      incremental_strategy:"
+                f" {contract.staging.incremental_strategy}",
+                f"      schema: {contract.staging.dataset}",
+            ]
+        else:
+            raise ValueError(f"Unknown layer {layer!r}: use raw or staging.")
+        return "\n".join(lines)
+
+    def render_source_yml(self, contract: EventContract) -> tuple[str, str]:
+        return f"    project: {contract.source.project}", ""
+
+    def supports_encryption(self) -> bool:
+        return True
+
+    def string_type(self) -> str:
+        return "STRING"
+
+    def is_string_type(self, physical_type: str) -> bool:
+        return physical_type.strip().upper() == "STRING"
 
     def render_dbt_config(self, contract: EventContract, layer: str) -> str:
         """Pre-built so the SQL template doesn't need to juggle conditional
@@ -170,16 +265,167 @@ class BigQueryDialect:
         return "{{ config(\n" + body + "\n) }}"
 
 
-_DIALECTS: tuple[Dialect, ...] = (BigQueryDialect(),)
+# DuckDB base type names (aliases included). Parameterised and nested forms
+# are accepted by is_valid_physical_type on top of these.
+_DUCKDB_TYPES = frozenset(
+    {
+        "VARCHAR",
+        "TEXT",
+        "BLOB",
+        "BYTEA",
+        "BIGINT",
+        "INT8",
+        "LONG",
+        "INTEGER",
+        "INT",
+        "INT4",
+        "SMALLINT",
+        "INT2",
+        "TINYINT",
+        "INT1",
+        "HUGEINT",
+        "UBIGINT",
+        "UINTEGER",
+        "USMALLINT",
+        "UTINYINT",
+        "UHUGEINT",
+        "DOUBLE",
+        "FLOAT8",
+        "FLOAT",
+        "FLOAT4",
+        "REAL",
+        "DECIMAL",
+        "NUMERIC",
+        "BOOLEAN",
+        "BOOL",
+        "DATE",
+        "TIME",
+        "TIMESTAMP",
+        "DATETIME",
+        "TIMESTAMPTZ",
+        "TIMESTAMP_S",
+        "TIMESTAMP_MS",
+        "TIMESTAMP_NS",
+        "INTERVAL",
+        "UUID",
+        "JSON",
+        "BIT",
+        "BITSTRING",
+    }
+)
+_DUCKDB_NESTED = re.compile(r"^(LIST|STRUCT|MAP|UNION|ENUM)\s*\(.*\)$", re.S)
+_DUCKDB_ARRAY_SUFFIX = re.compile(r"^(?P<inner>.+?)\s*\[\s*\d*\s*\]$", re.S)
+
+
+class DuckDBDialect:
+    """DuckDB, as driven by dbt-duckdb.
+
+    A contract picks it with `servers[].type` of `duckdb`, or of `local`:
+    a `local` server with `format: parquet` is the Parquet landing file
+    that dbt-duckdb reads through the source's `external_location` meta.
+    Models are views unless the contract says `table`. DuckDB has no
+    partitions or clustering, so none are emitted and no `ds` column is
+    added.
+    """
+
+    name = "duckdb"
+    display_name = "DuckDB"
+
+    def server_types(self) -> tuple[str, ...]:
+        return ("duckdb", "local")
+
+    def valid_physical_types(self) -> frozenset[str]:
+        return _DUCKDB_TYPES
+
+    def is_valid_physical_type(self, raw: str) -> bool:
+        t = raw.strip().upper()
+        if _DUCKDB_NESTED.match(t):
+            return True
+        m = _DUCKDB_ARRAY_SUFFIX.match(t)
+        if m:
+            return self.is_valid_physical_type(m.group("inner"))
+        base = re.split(r"[(]", t, maxsplit=1)[0].strip()
+        return base in self.valid_physical_types()
+
+    def cast_type(self, physical_type: str) -> str:
+        return physical_type
+
+    def has_partition_column(self) -> bool:
+        return False
+
+    def source_location(self, server: dict) -> tuple[str, str]:
+        location = (
+            server.get("database")
+            or server.get("path")
+            or server.get("location")
+            or server.get("server")
+            or ""
+        )
+        return str(location), server.get("schema") or "main"
+
+    def validate_project(self, project: str) -> bool:
+        return bool(project.strip())
+
+    def staging_materializations(self) -> frozenset[str]:
+        return frozenset({"snapshot", "incremental", "view", "table"})
+
+    def materialization(self, contract: EventContract, layer: str) -> str:
+        if layer == "raw":
+            declared = contract.raw.materialization
+        elif layer == "staging":
+            declared = contract.staging.materialization
+        else:
+            raise ValueError(f"Unknown layer {layer!r}: use raw or staging.")
+        return "table" if declared == "table" else "view"
+
+    def render_yml_config(self, contract: EventContract, layer: str) -> str:
+        cfg = contract.raw if layer == "raw" else contract.staging
+        return (
+            f"      materialized: {self.materialization(contract, layer)}\n"
+            f"      schema: {cfg.dataset}"
+        )
+
+    def render_source_yml(self, contract: EventContract) -> tuple[str, str]:
+        src = contract.source
+        if src.server_format == "parquet" and src.server_type == "local":
+            return "", (
+                f"        meta:\n          external_location: {src.project}"
+            )
+        return f"    database: {src.project}", ""
+
+    def supports_encryption(self) -> bool:
+        return False
+
+    def string_type(self) -> str:
+        return "VARCHAR"
+
+    def is_string_type(self, physical_type: str) -> bool:
+        return physical_type.strip().upper() in ("VARCHAR", "TEXT")
+
+    def render_dbt_config(self, contract: EventContract, layer: str) -> str:
+        if layer not in ("raw", "staging"):
+            raise ValueError(f"Unknown layer {layer!r}: use raw or staging.")
+        cfg = contract.raw if layer == "raw" else contract.staging
+        return (
+            "{{ config(\n"
+            f"    materialized='{self.materialization(contract, layer)}',\n"
+            f"    schema='{cfg.dataset}'\n"
+            ") }}"
+        )
+
+
+_DIALECTS: tuple[Dialect, ...] = (BigQueryDialect(), DuckDBDialect())
+
+
+def supported_server_types() -> tuple[str, ...]:
+    return tuple(sorted(t for d in _DIALECTS for t in d.server_types()))
 
 
 def get_dialect(server_type: str) -> Dialect:
     for d in _DIALECTS:
         if server_type in d.server_types():
             return d
-    supported = ", ".join(
-        sorted(t for d in _DIALECTS for t in d.server_types())
-    )
+    supported = ", ".join(supported_server_types())
     raise UnknownDialectError(
         f"Unsupported server type {server_type!r}."
         f" Supported dialects: {supported}."

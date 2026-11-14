@@ -12,6 +12,9 @@ its BigQuery/dbt specifics in ODCS `customProperties`:
   schema[].name              -> event name (dbt model stem)
   schema[].physicalName      -> source table
   servers[bigquery]          -> source project + dataset
+  servers[duckdb | local]    -> DuckDB dialect: database (or path) + schema;
+                                `local` with `format: parquet` is a Parquet
+                                landing file read via external_location
   schema[].properties[]      -> staging columns
     property.name            -> staging (consumer-facing) column name
     property.physicalName    -> source column name
@@ -46,6 +49,12 @@ from typing import Any
 
 import jsonschema
 import yaml
+
+from modelgen.dialect import (
+    UnknownDialectError,
+    get_dialect,
+    supported_server_types,
+)
 
 ODCS_API_VERSION = "v3.0.2"
 SUPPORTED_ODCS_VERSIONS = ("v3.0.2", "v3.1.0", "v3.2.0")
@@ -180,6 +189,7 @@ class SourceRef:
     dataset: str
     table: str
     server_type: str = "bigquery"  # ODCS servers[].type; picks the Dialect
+    server_format: str = ""  # ODCS servers[].format (local: parquet)
 
     def __post_init__(self):
         for label, value in [
@@ -276,6 +286,8 @@ class RawConfig:
     partition_by: PartitionConfig | None = None
     cluster_by: list[str] = field(default_factory=list)
     freshness: FreshnessConfig | None = None
+    # "" lets the dialect choose. Only the DuckDB dialect reads it.
+    materialization: str = ""
 
     @classmethod
     def from_raw(cls, raw: dict | None) -> RawConfig:
@@ -287,6 +299,7 @@ class RawConfig:
             partition_by=PartitionConfig.from_raw(raw.get("partitionBy")),
             cluster_by=_cluster_by(raw),
             freshness=FreshnessConfig.from_raw(raw.get("freshness")),
+            materialization=raw.get("materialization", ""),
         )
 
 
@@ -377,14 +390,25 @@ def _exemptions(obj: dict) -> list[Exemption]:
     ]
 
 
-def _bigquery_server(servers: list[dict]) -> dict:
-    bq = [s for s in servers if s.get("type") == "bigquery"]
-    if not bq:
-        raise ContractError(
-            "Contract has no BigQuery server. Add a servers entry with"
-            " type: bigquery, project, and dataset."
-        )
-    return bq[0]
+def _select_server(servers: list[dict]) -> dict:
+    """The first server whose `type` a registered dialect answers to.
+
+    dialect.py imports contract.py only for type checking, so this module
+    can use `get_dialect` directly.
+    """
+    for s in servers:
+        try:
+            get_dialect(str(s.get("type", "")))
+        except UnknownDialectError:
+            continue
+        return s
+    found = ", ".join(sorted({str(s.get("type")) for s in servers})) or "none"
+    raise ContractError(
+        "Contract has no BigQuery server or other supported server (found: "
+        f"{found}). Supported dialects: "
+        f"{', '.join(supported_server_types())}. Add a servers entry with"
+        " one of those types."
+    )
 
 
 @dataclass
@@ -467,7 +491,8 @@ class EventContract:
         obj = schemas[0]
         props = obj.get("properties") or []
 
-        bq = _bigquery_server(doc.get("servers") or [])
+        server = _select_server(doc.get("servers") or [])
+        project, dataset = get_dialect(server["type"]).source_location(server)
         table = obj.get("physicalName") or obj.get("name")
         if not table:
             raise ContractError(
@@ -488,10 +513,11 @@ class EventContract:
             unique_key=_unique_key_from_properties(props),
             loaded_at_field=loaded_at,
             source=SourceRef(
-                project=bq.get("project", ""),
-                dataset=bq.get("dataset", ""),
+                project=project,
+                dataset=dataset,
                 table=table,
-                server_type=bq["type"],
+                server_type=server["type"],
+                server_format=str(server.get("format") or ""),
             ),
             raw=RawConfig.from_raw(cfg.get("modelgenRaw")),
             staging=StagingConfig.from_raw(
