@@ -161,6 +161,12 @@ def gen(
     ),
     table: list[str] | None = _TABLE_OPTION,
     server: str | None = _SERVER_OPTION,
+    layer_opt: str | None = typer.Option(
+        None,
+        "--layer",
+        help="Only 'schema' is accepted: models yml for produced tables,"
+        " same as [bold]modelgen schema[/bold].",
+    ),
 ):
     """
     Generate a dbt model layer from a YAML data contract.
@@ -183,6 +189,16 @@ def gen(
     in contract order.
     """
     _configure_logging(verbose)
+
+    if layer_opt is not None:
+        if layer_opt != "schema" or raw or staging:
+            console.print(
+                "[red]--layer only accepts 'schema', and not together"
+                " with --raw or --staging.[/red]"
+            )
+            raise typer.Exit(2)
+        _write_schema(contract, output, dry_run, table, server)
+        return
 
     if raw == staging:
         console.print("[red]Specify exactly one of --raw or --staging.[/red]")
@@ -319,6 +335,68 @@ def gen(
                     border_style="yellow",
                 )
             )
+
+
+def _write_schema(
+    contract: Path,
+    output: Path,
+    dry_run: bool,
+    table: list[str] | None,
+    server: str | None,
+) -> None:
+    from modelgen.schema_mode import render_schema
+
+    try:
+        files = render_schema(contract, server=server, tables=table)
+    except ContractError as e:
+        console.print(f"[red]Invalid contract:[/red] {e}")
+        raise typer.Exit(1)
+    for filename, content in files.items():
+        dest = output / filename
+        if not dry_run:
+            output.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content)
+        status = "dry-run" if dry_run else "written"
+        console.print(f"{escape(str(dest))} {status}", highlight=False)
+
+
+@app.command()
+def schema(
+    contract: Path = typer.Argument(
+        ...,
+        help="Path to the YAML data contract.",
+        exists=True,
+        readable=True,
+    ),
+    output: Path = typer.Option(
+        Path("./models"),
+        "--output",
+        "-o",
+        help="Directory to write the yml into. Default: ./models.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview without writing."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Log everything."
+    ),
+    table: list[str] | None = _TABLE_OPTION,
+    server: str | None = _SERVER_OPTION,
+):
+    """
+    Generate models yml for tables the project PRODUCES.
+
+    One `_<contract-name>__models.yml` per contract: enforced column
+    types, not_null constraints and key tests. No sources block, no SQL,
+    no loaded-at column needed.
+
+    \b
+    Examples:
+        modelgen schema contracts/bus-marts.odcs.yaml -o models/marts
+        modelgen schema contract.yml --table eta_models --server prod
+    """
+    _configure_logging(verbose)
+    _write_schema(contract, output, dry_run, table, server)
 
 
 @app.command()
@@ -656,7 +734,8 @@ def check(
         raise typer.Exit(1)
 
     contract_files = cfg.contract_files()
-    if not contract_files:
+    schema_files = cfg.schema_contract_files()
+    if not contract_files and not schema_files:
         console.print(
             f"[yellow]No contracts found.[/yellow] "
             f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
@@ -684,6 +763,28 @@ def check(
     errors: list[tuple[str, str, str]] = []
     drifted: list[tuple[Path, str, str]] = []  # path, on_disk, expected
     in_sync = 0
+
+    if schema_files and cfg.schema_output is not None:
+        from modelgen.schema_mode import render_schema
+
+        for contract_path in schema_files:
+            try:
+                files = render_schema(contract_path, server=server)
+            except ContractError as e:
+                errors.append((contract_path.name, "parse", str(e)))
+                continue
+            for filename, expected in files.items():
+                dest = cfg.schema_output / filename
+                if not dest.exists():
+                    drifted.append((dest, "", expected))
+                    status = "[red]missing[/red]"
+                elif dest.read_text() != expected:
+                    drifted.append((dest, dest.read_text(), expected))
+                    status = "[red]drift[/red]"
+                else:
+                    in_sync += 1
+                    status = "[green]in sync[/green]"
+                table.add_row(contract_path.name, "schema", filename, status)
 
     for contract_path in contract_files:
         try:

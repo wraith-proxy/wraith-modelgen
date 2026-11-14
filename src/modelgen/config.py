@@ -28,9 +28,17 @@ class ModelgenConfig:
     contracts_glob: str
     raw_output: Path
     staging_output: Path
+    schema_contracts: str | None = None
+    schema_output: Path | None = None
 
     def contract_files(self) -> list[Path]:
         return sorted(self.root.glob(self.contracts_glob))
+
+    def schema_contract_files(self) -> list[Path]:
+        """Contracts for tables the project produces (schema mode)."""
+        if not self.schema_contracts:
+            return []
+        return sorted(self.root.glob(self.schema_contracts))
 
     @classmethod
     def _build(cls, root: Path, raw: dict) -> ModelgenConfig:
@@ -40,6 +48,12 @@ class ModelgenConfig:
             raw_output=root / raw.get("raw_output", _DEFAULT_RAW_OUTPUT),
             staging_output=root
             / raw.get("staging_output", _DEFAULT_STAGING_OUTPUT),
+            schema_contracts=raw.get("schema_contracts"),
+            schema_output=(
+                root / raw["schema_output"]
+                if raw.get("schema_output")
+                else None
+            ),
         )
 
     @classmethod
