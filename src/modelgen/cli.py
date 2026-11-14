@@ -164,8 +164,9 @@ def gen(
     layer_opt: str | None = typer.Option(
         None,
         "--layer",
-        help="Only 'schema' is accepted: models yml for produced tables,"
-        " same as [bold]modelgen schema[/bold].",
+        help="'schema' (models yml for produced tables, same as"
+        " [bold]modelgen schema[/bold]) or 'sources' (sources yml for"
+        " extract contracts, same as [bold]modelgen sources[/bold]).",
     ),
 ):
     """
@@ -191,13 +192,16 @@ def gen(
     _configure_logging(verbose)
 
     if layer_opt is not None:
-        if layer_opt != "schema" or raw or staging:
+        if layer_opt not in ("schema", "sources") or raw or staging:
             console.print(
-                "[red]--layer only accepts 'schema', and not together"
-                " with --raw or --staging.[/red]"
+                "[red]--layer only accepts 'schema' or 'sources', and not"
+                " together with --raw or --staging.[/red]"
             )
             raise typer.Exit(2)
-        _write_schema(contract, output, dry_run, table, server)
+        _write_schema(
+            contract, output, dry_run, table, server,
+            sources=layer_opt == "sources",
+        )  # fmt: skip
         return
 
     if raw == staging:
@@ -344,14 +348,19 @@ def _write_schema(
     table: list[str] | None,
     server: str | None,
     strict: bool = False,
+    sources: bool = False,
 ) -> None:
     from modelgen.schema_mode import render_schema
+    from modelgen.sources_mode import render_sources
 
     unmapped: list[str] = []
     try:
-        files = render_schema(
-            contract, server=server, tables=table, unmapped=unmapped
-        )
+        if sources:
+            files = render_sources(contract, tables=table, unmapped=unmapped)
+        else:
+            files = render_schema(
+                contract, server=server, tables=table, unmapped=unmapped
+            )
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
         raise typer.Exit(1)
@@ -415,6 +424,48 @@ def schema(
     """
     _configure_logging(verbose)
     _write_schema(contract, output, dry_run, table, server, strict)
+
+
+@app.command()
+def sources(
+    contract: Path = typer.Argument(
+        ...,
+        help="Path to the YAML data contract.",
+        exists=True,
+        readable=True,
+    ),
+    output: Path = typer.Option(
+        Path("./models"),
+        "--output",
+        "-o",
+        help="Directory to write the yml into. Default: ./models.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview without writing."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Log everything."
+    ),
+    table: list[str] | None = _TABLE_OPTION,
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit 1 when a quality rule cannot be mapped to a dbt test.",
+    ),
+):
+    """
+    Generate a sources yml for tables the project READS (extract contracts).
+
+    One `_<contract-name>__sources.yml` per contract: external location,
+    freshness, a column-set test and tests mapped from ODCS quality rules
+    (singular ones under tests/generated/, selecting from `source()`).
+
+    \b
+    Examples:
+        modelgen sources contracts/extract.odcs.yaml -o models/staging
+    """
+    _configure_logging(verbose)
+    _write_schema(contract, output, dry_run, table, None, strict, sources=True)
 
 
 @app.command()
@@ -753,7 +804,8 @@ def check(
 
     contract_files = cfg.contract_files()
     schema_files = cfg.schema_contract_files()
-    if not contract_files and not schema_files:
+    sources_files = cfg.sources_contract_files()
+    if not contract_files and not schema_files and not sources_files:
         console.print(
             f"[yellow]No contracts found.[/yellow] "
             f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
@@ -782,17 +834,32 @@ def check(
     drifted: list[tuple[Path, str, str]] = []  # path, on_disk, expected
     in_sync = 0
 
-    if schema_files and cfg.schema_output is not None:
-        from modelgen.schema_mode import render_schema
+    from modelgen.schema_mode import render_schema
+    from modelgen.sources_mode import render_sources
 
-        for contract_path in schema_files:
+    produced = (
+        (schema_files, cfg.schema_output, "schema", None),
+        (
+            cfg.sources_contract_files(),
+            cfg.sources_output,
+            "sources",
+            render_sources,
+        ),
+    )
+    for files_, out_dir, layer_name, renderer in produced:
+        if not files_ or out_dir is None:
+            continue
+        for contract_path in files_:
             try:
-                files = render_schema(contract_path, server=server)
+                if renderer is None:
+                    files = render_schema(contract_path, server=server)
+                else:
+                    files = renderer(contract_path)
             except ContractError as e:
                 errors.append((contract_path.name, "parse", str(e)))
                 continue
             for filename, expected in files.items():
-                dest = cfg.schema_output / filename
+                dest = out_dir / filename
                 if not dest.exists():
                     drifted.append((dest, "", expected))
                     status = "[red]missing[/red]"
@@ -802,7 +869,7 @@ def check(
                 else:
                     in_sync += 1
                     status = "[green]in sync[/green]"
-                table.add_row(contract_path.name, "schema", filename, status)
+                table.add_row(contract_path.name, layer_name, filename, status)
 
     for contract_path in contract_files:
         try:

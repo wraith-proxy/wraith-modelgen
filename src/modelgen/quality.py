@@ -148,6 +148,7 @@ def _metric_query(metric: str, cols: list[str], percent: bool) -> str | None:
 def _singular(
     header: str, rule_label: str, model: str, query: str,
     op: str, val: Any, severity: str | None, column: str | None,
+    source: str | None = None,
 ) -> str | None:  # fmt: skip
     if column is None and re.search(r"\$?\{(property|column)\}", query):
         return None
@@ -155,6 +156,8 @@ def _singular(
     def sub(m: re.Match[str]) -> str:
         if m.group(1) in ("property", "column"):
             return str(column)
+        if source is not None:
+            return f"{{{{ source('{source}', '{model}') }}}}"
         return f"{{{{ ref('{model}') }}}}"
 
     body = _PLACEHOLDER.sub(sub, query.strip().rstrip(";").rstrip())
@@ -174,12 +177,17 @@ def _singular(
 
 
 def map_object(
-    obj: dict[str, Any], header: str, existing: ModelTests
+    obj: dict[str, Any],
+    header: str,
+    existing: ModelTests,
+    source: str | None = None,
 ) -> ModelTests:
     """Map every quality rule of one schema object.
 
     `existing` carries the tests the schema already declares (keys,
-    not_null) so identical rules are not repeated.
+    not_null) so identical rules are not repeated. With `source`, generated
+    singular tests select from `{{ source(<source>, <table>) }}` rather than
+    `{{ ref(<table>) }}`.
     """
     model = str(obj["name"])
     out = existing
@@ -195,8 +203,9 @@ def map_object(
         rid = slug(str(rule["id"])) if rule.get("id") else f"rule{ordinal}"
         label = f"{model}.{rid}"
         if not _map_rule(
-            rule, column, props, model, rid, label, header, used, out
-        ):
+            rule, column, props, model, rid, label, header, used, out,
+            source,
+        ):  # fmt: skip
             out.unmapped.append(label)
     return out
 
@@ -211,6 +220,7 @@ def _map_rule(
     header: str,
     used: set[str],
     out: ModelTests,
+    source: str | None = None,
 ) -> bool:
     sev = rule.get("severity")
     rtype = rule.get("type") or ("library" if rule.get("metric") else None)
@@ -272,7 +282,7 @@ def _map_rule(
     if base in used:
         return False
     text = _singular(
-        header, label, model, query, comp[0], comp[1], sev, column
+        header, label, model, query, comp[0], comp[1], sev, column, source
     )
     if text is None:
         return False
