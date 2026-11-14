@@ -97,7 +97,8 @@ _SERVER_OPTION = typer.Option(
     "-s",
     help=(
         "Select the contract server by its `server:` id. Default: the"
-        " first server whose type modelgen supports."
+        " first BigQuery server, else the first server whose type modelgen"
+        " supports. Not accepted with --layer sources."
     ),
 )
 
@@ -196,6 +197,12 @@ def gen(
             console.print(
                 "[red]--layer only accepts 'schema' or 'sources', and not"
                 " together with --raw or --staging.[/red]"
+            )
+            raise typer.Exit(2)
+        if layer_opt == "sources" and server is not None:
+            console.print(
+                "[red]--server does not apply to --layer sources: sources"
+                " yml is dialect-independent.[/red]"
             )
             raise typer.Exit(2)
         _write_schema(

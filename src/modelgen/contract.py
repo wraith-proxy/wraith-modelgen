@@ -396,8 +396,9 @@ def _select_server(servers: list[dict], name: str | None = None) -> dict:
     """Pick the server to generate against.
 
     With `name`, the server whose `server:` id matches; it must be of a
-    supported type. Without, the first server whose `type` a registered
-    dialect answers to (contract order).
+    supported type. Without, the first `type: bigquery` server (as in
+    0.14.x), and only if there is none, the first server whose `type` a
+    registered dialect answers to (contract order).
 
     dialect.py imports contract.py only for type checking, so this module
     can use `get_dialect` directly.
@@ -420,6 +421,9 @@ def _select_server(servers: list[dict], name: str | None = None) -> dict:
             f"No server named {name!r}. Servers in this contract:"
             f" {', '.join(ids) or 'none'}."
         )
+    for s in servers:
+        if str(s.get("type", "")).lower() == "bigquery":
+            return s
     for s in servers:
         try:
             get_dialect(str(s.get("type", "")))

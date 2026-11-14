@@ -324,3 +324,37 @@ def test_check_with_nothing_generated_is_missing(tmp_path):
     res = _cli("check", cwd=proj, check=False)
     assert res.returncode == 1
     assert "missing" in res.stdout.lower()
+
+
+def test_contract_level_location_is_consistent_under_table_filter(tmp_path):
+    from modelgen.contract import ContractError
+
+    c = _two_table_contract(tmp_path)
+    with pytest.raises(ContractError, match="externalLocation"):
+        render_sources(c, tables=["other_positions"])
+
+
+@pytest.mark.parametrize("prop", ["loadedAtField", "dbtSourceName"])
+def test_list_valued_scalar_property_is_a_contract_error(tmp_path, prop):
+    from modelgen.contract import ContractError
+
+    doc = yaml.safe_load(CONTRACT.read_text().split("\n---\n", 1)[1])
+    doc["customProperties"] = [
+        cp for cp in doc["customProperties"] if cp["property"] != prop
+    ] + [{"property": prop, "value": ["a", "b"]}]
+    c = tmp_path / "c.yaml"
+    c.write_text(yaml.safe_dump(doc, sort_keys=False))
+    with pytest.raises(ContractError, match=prop):
+        render_sources(c)
+
+
+@pytest.mark.parametrize("val", ["0 days", "0 hours", "0 minutes", "00 days"])
+def test_zero_freshness_is_a_contract_error(tmp_path, val):
+    from modelgen.contract import ContractError
+
+    c = tmp_path / "c.yaml"
+    c.write_text(
+        CONTRACT.read_text().replace("value: 2 days", f"value: {val}")
+    )
+    with pytest.raises(ContractError, match="freshnessWarnAfter"):
+        render_sources(c)
