@@ -270,7 +270,7 @@ def gen(
             contract, server=server, tables=table
         )
     except ContractError as e:
-        console.print(f"[red]Invalid contract:[/red] {e}")
+        console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
         raise typer.Exit(ExitCode.INVALID)
 
     failed = 0
@@ -467,7 +467,7 @@ def _write_schema(
                 contract, server=server, tables=table, unmapped=unmapped
             )
     except ContractError as e:
-        console.print(f"[red]Invalid contract:[/red] {e}")
+        console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
         raise typer.Exit(ExitCode.INVALID)
     for filename, content in files.items():
         dest = _dest(output, filename, tests_output)
@@ -625,7 +625,7 @@ def validate(
     try:
         events = EventContract.from_file_all(contract, server=server)
     except ContractError as e:
-        console.print(f"[red]Invalid contract:[/red] {e}")
+        console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
         raise typer.Exit(ExitCode.INVALID)
 
     failed = False

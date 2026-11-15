@@ -48,7 +48,7 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jsonschema
 import yaml
@@ -60,13 +60,88 @@ from modelgen.dialect import (
 )
 from modelgen.errors import ModelgenError
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
 ODCS_API_VERSION = "v3.0.2"
 SUPPORTED_ODCS_VERSIONS = ("v3.0.2", "v3.1.0", "v3.2.0")
 _SCHEMA_DIR = Path(__file__).parent / "schema"
 
 
+@dataclass(frozen=True)
+class Issue:
+    """One problem in a contract. `pointer` is an RFC 6901 JSON pointer
+    ('' is the document root); `line` and `column` are 1-based."""
+
+    code: str
+    message: str
+    pointer: str = ""
+    line: int | None = None
+    column: int | None = None
+    severity: str = "error"
+
+
 class ContractError(ModelgenError, ValueError):
     """Raised when a contract is malformed or references invalid state."""
+
+    def __init__(self, message: str, issues: list[Issue] | None = None):
+        super().__init__(message)
+        self.issues = list(issues) if issues else [Issue("contract", message)]
+
+
+def _pointer(path: Iterable[object]) -> str:
+    return "".join(
+        "/" + str(p).replace("~", "~0").replace("/", "~1") for p in path
+    )
+
+
+def node_positions(text: str) -> dict[str, tuple[int, int]]:
+    """(line, column), both 1-based, of every value in the YAML `text`,
+    keyed by JSON pointer ('' for the root).
+
+    It re-parses `text`, so call it only once there is something to
+    locate and the document has passed the size, depth and alias guards.
+    """
+    positions: dict[str, tuple[int, int]] = {}
+    stack: list[tuple[str, yaml.Node]] = [
+        ("", yaml.compose(text, Loader=yaml.SafeLoader))
+    ]
+    while stack:
+        pointer, node = stack.pop()
+        if node is None:
+            continue
+        mark = node.start_mark
+        positions[pointer] = (mark.line + 1, mark.column + 1)
+        # Children go on the stack in reverse so the last duplicate key is
+        # popped and written last, matching safe_load's last-key-wins.
+        if isinstance(node, yaml.MappingNode):
+            stack.extend(
+                reversed(
+                    [
+                        (pointer + _pointer([key.value]), value)
+                        for key, value in node.value
+                        if isinstance(key, yaml.ScalarNode)
+                    ]
+                )
+            )
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(
+                reversed(
+                    [
+                        (pointer + _pointer([i]), child)
+                        for i, child in enumerate(node.value)
+                    ]
+                )
+            )
+    return positions
+
+
+def _located(
+    pointer: str, positions: dict[str, tuple[int, int]]
+) -> tuple[int, int] | None:
+    while pointer not in positions and pointer:
+        pointer = pointer.rsplit("/", 1)[0]
+    return positions.get(pointer)
 
 
 # ponytail: fixed ceilings, far above any real contract. Make them
@@ -78,6 +153,10 @@ _MAX_DEPTH = 64
 _JINJA = re.compile(r"\{\{|\{%|\{#")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f\x85  ]")
 _SAFE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+
+def _limit_error(message: str) -> ContractError:
+    return ContractError(message, [Issue("limit", message)])
 
 
 def has_jinja(text: str) -> bool:
@@ -100,7 +179,7 @@ def safe_name(what: str, value: object) -> str:
 def read_contract(path: Path) -> str:
     """The contract's text, unless the file is too large to be one."""
     if path.stat().st_size > MAX_CONTRACT_BYTES:
-        raise ContractError(
+        raise _limit_error(
             f"Contract at {path} is larger than {MAX_CONTRACT_BYTES} bytes."
         )
     return path.read_text()
@@ -132,10 +211,13 @@ def odcs_schema_errors(doc: dict[str, Any]) -> list[Any]:
         if version in _LEGACY_ODCS_VERSIONS:
             version = ODCS_API_VERSION
         else:
-            raise ContractError(
+            message = (
                 f"Contract is not valid ODCS: unsupported apiVersion"
                 f" {version!r}. Supported versions:"
                 f" {', '.join(SUPPORTED_ODCS_VERSIONS)}."
+            )
+            raise ContractError(
+                message, [Issue("odcs-version", message, "/apiVersion")]
             )
     return sorted(
         _odcs_validator(version).iter_errors(doc), key=lambda e: e.path
@@ -170,6 +252,7 @@ class StagingColumn:
     tests: list[ColumnTest] = field(default_factory=list)
     classification: str = ""  # "" | "pii" | "psi": drives encryption
     exemptions: list[Exemption] = field(default_factory=list)
+    pointer: str = ""  # JSON pointer of the ODCS property it came from
 
     def __post_init__(self):
         if not self.source:
@@ -186,7 +269,7 @@ class StagingColumn:
         return self.source != self.name
 
     @classmethod
-    def from_property(cls, prop: dict) -> StagingColumn:
+    def from_property(cls, prop: dict, pointer: str = "") -> StagingColumn:
         """Build from an ODCS schema property.
 
         physicalName is the source column; name is the consumer-facing
@@ -219,6 +302,7 @@ class StagingColumn:
             tests=tests,
             classification=(prop.get("classification") or "").strip().lower(),
             exemptions=_exemptions(prop),
+            pointer=pointer,
         )
 
 
@@ -491,6 +575,7 @@ class EventContract:
     exemptions: list[Exemption] = field(default_factory=list)
     contract_name: str = ""  # ODCS top-level name (falls back to name)
     contract_version: str = ""  # ODCS top-level version
+    pointer: str = ""  # JSON pointer of its ODCS schema object
 
     @property
     def classified_columns(self) -> list[StagingColumn]:
@@ -572,8 +657,11 @@ class EventContract:
 
         server = _select_server(doc.get("servers") or [], server_name)
         project, dataset = get_dialect(server["type"]).source_location(server)
+        index = {id(o): i for i, o in enumerate(doc["schema"])}
         return [
-            cls._from_object(doc, obj, server, project, dataset)
+            cls._from_object(
+                doc, obj, server, project, dataset, f"/schema/{index[id(obj)]}"
+            )
             for obj in schemas
         ]
 
@@ -585,6 +673,7 @@ class EventContract:
         server: dict[str, Any],
         project: str,
         dataset: str,
+        pointer: str = "",
     ) -> EventContract:
         props = obj.get("properties") or []
         table = obj.get("physicalName") or obj.get("name")
@@ -617,12 +706,16 @@ class EventContract:
             raw=RawConfig.from_raw(cfg.get("modelgenRaw")),
             staging=StagingConfig.from_raw(
                 cfg.get("modelgenStaging"),
-                [StagingColumn.from_property(p) for p in props],
+                [
+                    StagingColumn.from_property(p, f"{pointer}/properties/{j}")
+                    for j, p in enumerate(props)
+                ],
             ),
             subject_field=cfg.get("modelgenSubjectField") or "",
             exemptions=_exemptions(obj),
             contract_name=str(doc.get("name") or obj["name"]),
             contract_version=str(doc.get("version") or ""),
+            pointer=pointer,
         )
 
 
@@ -666,15 +759,26 @@ def select_schema_objects(
 def _load_doc(text: str, source: str) -> dict[str, Any]:
     """Parse YAML and check it is a valid ODCS DataContract."""
     if len(text) > MAX_CONTRACT_BYTES:
-        raise ContractError(
+        raise _limit_error(
             f"Contract at {source} is larger than {MAX_CONTRACT_BYTES} bytes."
         )
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as e:
-        raise ContractError(f"Failed to parse YAML at {source}: {e}") from e
+        mark = getattr(e, "problem_mark", None)
+        if mark is None:
+            message = f"Failed to parse YAML at {source}: {e}"
+            issue = Issue("yaml", message)
+        else:
+            line, column = mark.line + 1, mark.column + 1
+            message = (
+                f"Failed to parse YAML at {source}"
+                f" (line {line}, column {column}): {e}"
+            )
+            issue = Issue("yaml", message, line=line, column=column)
+        raise ContractError(message, [issue]) from e
     except RecursionError as e:
-        raise ContractError(
+        raise _limit_error(
             f"Contract at {source} is nested too deeply to parse."
         ) from e
 
@@ -686,12 +790,32 @@ def _load_doc(text: str, source: str) -> dict[str, Any]:
     _refuse_hostile_shape(doc, source)
     errors = odcs_schema_errors(doc)
     if errors:
-        first = errors[0]
-        loc = "/".join(str(p) for p in first.path) or "<root>"
+        positions = node_positions(text)
+        issues = []
+        for e in errors:
+            pointer = _pointer(e.absolute_path)
+            line, column = _located(pointer, positions) or (None, None)
+            issues.append(
+                Issue(
+                    "schema." + str(e.validator),
+                    e.message,
+                    pointer,
+                    line,
+                    column,
+                )
+            )
         raise ContractError(
-            f"Contract at {source} is not valid ODCS"
-            f" ({len(errors)} error(s)). First at {loc}:"
-            f" {first.message}"
+            "\n".join(
+                [
+                    f"Contract at {source} is not valid ODCS"
+                    f" ({len(issues)} error(s)):"
+                ]
+                + [
+                    f"  - {i.pointer or '<root>'} (line {i.line}): {i.message}"
+                    for i in issues
+                ]
+            ),
+            issues,
         )
 
     if doc.get("kind") != "DataContract":
@@ -720,12 +844,12 @@ def _refuse_hostile_shape(doc: dict[str, Any], source: str) -> None:
         node, depth = stack.pop()
         seen += 1
         if seen > _MAX_NODES:
-            raise ContractError(
+            raise _limit_error(
                 f"Contract at {source} expands to more than {_MAX_NODES}"
                 " nodes. YAML aliases are the usual cause."
             )
         if depth > _MAX_DEPTH:
-            raise ContractError(
+            raise _limit_error(
                 f"Contract at {source} is nested more than {_MAX_DEPTH}"
                 " levels deep."
             )

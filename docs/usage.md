@@ -113,7 +113,9 @@ All findings are reported in one pass: typo'd incremental strategies,
 casts to types the dialect does not know, duplicate columns, unsafe
 identifiers, partition or cluster references to undeclared staging
 columns, and keys the staging model never selects. See the
-[lint rule catalogue](linting.md).
+[lint rule catalogue](linting.md). A contract that fails the ODCS schema
+gets every schema error reported, each with its JSON pointer and the line
+it sits on in the file.
 
 `--strict` turns warnings (missing descriptions, untested keys) into
 failures. For CI gates with standards. A rule that is wrong for one
