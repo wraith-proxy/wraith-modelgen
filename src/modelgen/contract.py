@@ -227,6 +227,26 @@ def odcs_schema_errors(doc: dict[str, Any]) -> list[Any]:
 _LEGACY_ODCS_VERSIONS = ("v3.0.1", "v3.0.0", "v2.2.2", "v2.2.1", "v2.2.0")
 
 
+def deprecation_notices(doc: dict[str, Any]) -> tuple[Issue, ...]:
+    """Warnings for a contract that is accepted but deprecated."""
+    version = doc.get("apiVersion")
+    if version not in _LEGACY_ODCS_VERSIONS:
+        return ()
+    message = (
+        f"apiVersion {version} is deprecated and will stop being accepted"
+        " in a later minor release."
+        f" Supported: {', '.join(SUPPORTED_ODCS_VERSIONS)}."
+    )
+    return (
+        Issue(
+            "odcs-version-deprecated",
+            message,
+            "/apiVersion",
+            severity="warning",
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class ColumnTest:
     name: str
@@ -576,6 +596,7 @@ class EventContract:
     contract_name: str = ""  # ODCS top-level name (falls back to name)
     contract_version: str = ""  # ODCS top-level version
     pointer: str = ""  # JSON pointer of its ODCS schema object
+    notices: tuple[Issue, ...] = ()
 
     @property
     def classified_columns(self) -> list[StagingColumn]:
@@ -716,6 +737,7 @@ class EventContract:
             contract_name=str(doc.get("name") or obj["name"]),
             contract_version=str(doc.get("version") or ""),
             pointer=pointer,
+            notices=deprecation_notices(doc),
         )
 
 

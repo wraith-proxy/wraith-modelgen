@@ -29,7 +29,9 @@ from typing import Any
 
 from modelgen.contract import (
     ContractError,
+    Issue,
     _load_doc,
+    deprecation_notices,
     read_contract,
     safe_name,
     select_schema_objects,
@@ -140,13 +142,16 @@ def render_sources(
     *,
     tables: list[str] | None = None,
     unmapped: list[str] | None = None,
+    notices: list[Issue] | None = None,
 ) -> dict[str, str]:
     """{relative path: content} for one contract. Nothing is written.
 
     Quality rules that cannot be mapped are appended to `unmapped` as
-    `<table>.<rule>`.
+    `<table>.<rule>`. Deprecation warnings are appended to `notices`.
     """
     doc = _load_doc(read_contract(contract), str(contract))
+    if notices is not None:
+        notices.extend(deprecation_notices(doc))
     schemas, object_count = select_schema_objects(doc, tables)
     # Both names become quoted source() arguments in generated tests.
     for obj in schemas:

@@ -81,6 +81,8 @@ modelgen check --help
 
 Each failure class has its own exit code, so a script can tell an invalid contract from a lint failure, drift or a missing credential. The codes and their precedence are in the **[Exit codes](docs/usage.md#exit-codes)** table.
 
+What modelgen keeps stable between releases is in the **[Compatibility policy](docs/compatibility.md)**.
+
 ### `gen`
 
 Generates one layer, or one mode's yml, from one contract. Specify exactly one of `--raw`, `--staging` or `--layer`.
@@ -327,7 +329,7 @@ The top-level `kind` must be `DataContract`. The `apiVersion` picks the bundled 
 | `v3.2.0` | Supported. Validated against the v3.2.0 schema. |
 | `v3.1.0` | Supported. Validated against the v3.1.0 schema. |
 | `v3.0.2` | Supported. Validated against the v3.0.2 schema. This is also the default. |
-| `v3.0.1`, `v3.0.0`, `v2.2.2`, `v2.2.1`, `v2.2.0` | Accepted. Validated against the v3.0.2 schema, whose `apiVersion` enum lists them. There is no separate schema for these, so they get v3.0.2 rules. |
+| `v3.0.1`, `v3.0.0`, `v2.2.2`, `v2.2.1`, `v2.2.0` | Deprecated: still accepted and validated against the v3.0.2 schema; prints a warning; will be removed in a later minor release. |
 | missing, or not a string | Validated against v3.0.2, which reports the problem. |
 | anything else (for example `v2.3.0` or `v9.9.9`) | Rejected: `unsupported apiVersion`, followed by the list of supported versions (`v3.0.2, v3.1.0, v3.2.0`). |
 

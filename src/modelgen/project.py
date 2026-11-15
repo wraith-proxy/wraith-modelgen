@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 
 from modelgen.config import ModelgenConfig
-from modelgen.contract import ContractError, EventContract
+from modelgen.contract import ContractError, EventContract, Issue
 from modelgen.exit_codes import ExitCode, worst
 from modelgen.generator import (
     GenerationError,
@@ -56,6 +56,7 @@ class ProjectResult:
     problems: list[Problem]
     unmapped_rules: list[str]
     new_source_columns: list[tuple[str, list[str]]]
+    notices: list[tuple[Path, Issue]] = field(default_factory=list)
 
     @property
     def exit_code(self) -> ExitCode:
@@ -85,6 +86,7 @@ class _Rendered:
     contracts: list[Path] = field(default_factory=list)
     items: list[_Unit | Problem] = field(default_factory=list)
     unmapped: list[str] = field(default_factory=list)
+    notices: list[tuple[Path, Issue]] = field(default_factory=list)
 
 
 def _lint_errors(event: EventContract) -> list[Finding]:
@@ -100,7 +102,10 @@ def _dest(output: Path, filename: str, tests_output: Path | None) -> Path:
 
 
 def _produced_files(
-    cfg: ModelgenConfig, server: str | None, unmapped: list[str]
+    cfg: ModelgenConfig,
+    server: str | None,
+    unmapped: list[str],
+    notices: list[tuple[Path, Issue]],
 ):
     """Yield (contract, mode, destination, content).
 
@@ -119,16 +124,23 @@ def _produced_files(
         if not files or out_dir is None:
             continue
         for contract_path in files:
+            found: list[Issue] = []
             try:
                 if mode == "schema":
                     rendered = render_schema(
-                        contract_path, server=server, unmapped=unmapped
+                        contract_path,
+                        server=server,
+                        unmapped=unmapped,
+                        notices=found,
                     )
                 else:
-                    rendered = render_sources(contract_path, unmapped=unmapped)
+                    rendered = render_sources(
+                        contract_path, unmapped=unmapped, notices=found
+                    )
             except ContractError as e:
                 yield contract_path, mode, e, ""
                 continue
+            notices.extend((contract_path, n) for n in found)
             for filename, content in rendered.items():
                 dest = _dest(out_dir, filename, cfg.tests_output)
                 yield contract_path, mode, dest, content
@@ -162,6 +174,10 @@ def _render(
             )
             continue
 
+        if parsed:
+            events.notices.extend(
+                (contract_path, n) for n in parsed[0].notices
+            )
         for event in parsed:
             label = (
                 contract_path.name
@@ -229,7 +245,7 @@ def _render(
 
     produced = _Rendered()
     for contract_path, mode, dest, content in _produced_files(
-        cfg, server, produced.unmapped
+        cfg, server, produced.unmapped, produced.notices
     ):
         if contract_path not in produced.contracts:
             produced.contracts.append(contract_path)
@@ -262,11 +278,19 @@ def _render(
         first.contracts + second.contracts,
         first.items + second.items,
         produced.unmapped,
+        first.notices + second.notices,
     )
 
 
 def _empty_result(rendered: _Rendered) -> ProjectResult:
-    return ProjectResult(rendered.contracts, [], [], rendered.unmapped, [])
+    return ProjectResult(
+        rendered.contracts,
+        [],
+        [],
+        rendered.unmapped,
+        [],
+        rendered.notices,
+    )
 
 
 def run_project(

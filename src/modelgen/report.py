@@ -166,7 +166,8 @@ def _problem_issues(problem: Problem) -> list[dict]:
 
 
 def project_report(command: str, result: ProjectResult) -> dict:
-    issues = [i for p in result.problems for i in _problem_issues(p)]
+    issues = [contract_issue(path, n) for path, n in result.notices]
+    issues += [i for p in result.problems for i in _problem_issues(p)]
     issues += unmapped_issues(
         result.contracts[0] if result.contracts else ".",
         result.unmapped_rules,

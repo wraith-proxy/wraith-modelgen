@@ -19,6 +19,7 @@ from modelgen import __version__
 from modelgen.contract import (
     ContractError,
     EventContract,
+    Issue,
     node_positions,
     read_contract,
 )
@@ -54,6 +55,8 @@ from modelgen.report import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from modelgen.config import ModelgenConfig
 
 
@@ -136,6 +139,14 @@ def _print_findings(findings: list[Finding]) -> None:
         err_console.print(
             f"[{colour}]{label}[/{colour}] [dim]{f.code}[/dim]"
             f" {f.message}{why}"
+        )
+
+
+def _print_notices(notices: Iterable[Issue]) -> None:
+    for notice in notices:
+        err_console.print(
+            f"[yellow]Warning:[/yellow] {escape(notice.message)}",
+            soft_wrap=True,
         )
 
 
@@ -342,6 +353,8 @@ def gen(
         finish(ExitCode.INVALID)
         return
 
+    _print_notices(events[0].notices)
+    issues.extend(contract_issue(contract, i) for i in events[0].notices)
     failed = 0
     positions = node_positions(read_contract(contract)) if as_json else {}
     for event in events:
@@ -550,18 +563,27 @@ def _write_schema(
             raise typer.Exit(code)
 
     unmapped: list[str] = []
+    notices: list[Issue] = []
     try:
         if sources:
-            files = render_sources(contract, tables=table, unmapped=unmapped)
+            files = render_sources(
+                contract, tables=table, unmapped=unmapped, notices=notices
+            )
         else:
             files = render_schema(
-                contract, server=server, tables=table, unmapped=unmapped
+                contract,
+                server=server,
+                tables=table,
+                unmapped=unmapped,
+                notices=notices,
             )
     except ContractError as e:
         err_console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
         issues.extend(contract_issue(contract, i) for i in e.issues)
         finish(ExitCode.INVALID)
         return
+    _print_notices(notices)
+    issues.extend(contract_issue(contract, i) for i in notices)
     status = "dry_run" if dry_run else "written"
     for filename, content in files.items():
         dest = _dest(output, filename, tests_output)
@@ -751,6 +773,8 @@ def validate(
         finish(ExitCode.INVALID)
         return
 
+    _print_notices(events[0].notices)
+    issues.extend(contract_issue(contract, i) for i in events[0].notices)
     positions = node_positions(read_contract(contract)) if as_json else {}
     failed = False
     for event in events:
@@ -892,6 +916,7 @@ def run(
         notify=_notify,
     )
 
+    _print_notices(n for _, n in result.notices)
     if as_json:
         _print_problems(result.problems)
         emit(project_report("run", result))
@@ -1012,6 +1037,7 @@ def check(
         cfg, server=server, from_contract=from_contract, notify=_notify
     )
 
+    _print_notices(n for _, n in result.notices)
     if output_format is OutputFormat.JSON:
         _print_problems(result.problems)
         emit(project_report("check", result))
