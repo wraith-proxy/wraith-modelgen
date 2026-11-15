@@ -9,9 +9,10 @@ import sys
 from pathlib import Path
 
 from modelgen import __version__
-from modelgen.contract import Issue
+from modelgen.contract import Issue, node_positions, read_contract
 from modelgen.exit_codes import ExitCode
 from modelgen.lint import Finding
+from modelgen.project import FileStatus, Problem, ProjectResult
 
 SCHEMA_VERSION = 1
 
@@ -77,6 +78,112 @@ def build_report(
         "issues": issues,
         "files": files,
     }
+
+
+def file_entry(
+    path: Path,
+    layer: str,
+    content: str,
+    status: str,
+    on_disk: str | None = None,
+) -> dict:
+    return {
+        "path": str(path),
+        "layer": layer,
+        "sha256": sha256_bytes(content.encode()),
+        "status": status,
+        "on_disk_sha256": None
+        if on_disk is None
+        else sha256_bytes(on_disk.encode()),
+    }
+
+
+def plain_issue(
+    source: Path | str,
+    code: str,
+    message: str,
+    severity: str = "error",
+    object_name: str | None = None,
+) -> dict:
+    return {
+        "source": str(source),
+        "object": object_name,
+        "code": code,
+        "severity": severity,
+        "message": message,
+        "pointer": None,
+        "line": None,
+        "column": None,
+        "exempt_reason": None,
+    }
+
+
+def unmapped_issues(
+    source: Path | str, rules: list[str], severity: str = "warning"
+) -> list[dict]:
+    return [
+        plain_issue(
+            source,
+            "quality-rule-unmapped",
+            f"quality rule {rule} is not mapped to a dbt test",
+            severity,
+            rule,
+        )
+        for rule in rules
+    ]
+
+
+_PROBLEM_CODE = {
+    ExitCode.INVALID: "generation",
+    ExitCode.ENVIRONMENT: "introspection",
+}
+
+
+def _problem_issues(problem: Problem) -> list[dict]:
+    event = problem.label.partition(":")[2] or None
+    if not problem.issues:
+        code = (
+            _PROBLEM_CODE.get(problem.exit_code, "contract")
+            if problem.layer != "parse"
+            else "contract"
+        )
+        return [
+            plain_issue(
+                problem.contract, code, problem.message, object_name=event
+            )
+        ]
+    positions = (
+        node_positions(read_contract(problem.contract))
+        if any(isinstance(i, Finding) for i in problem.issues)
+        else {}
+    )
+    return [
+        finding_issue(problem.contract, i, event, positions)
+        if isinstance(i, Finding)
+        else contract_issue(problem.contract, i, event)
+        for i in problem.issues
+    ]
+
+
+def project_report(command: str, result: ProjectResult) -> dict:
+    issues = [i for p in result.problems for i in _problem_issues(p)]
+    issues += unmapped_issues(
+        result.contracts[0] if result.contracts else ".",
+        result.unmapped_rules,
+    )
+    files = [
+        file_entry(
+            f.path,
+            f.layer,
+            f.content,
+            f.status.value,
+            f.on_disk if f.status is FileStatus.DRIFT else None,
+        )
+        for f in result.files
+    ]
+    return build_report(
+        command, result.exit_code, result.contracts, issues, files
+    )
 
 
 def emit(report: dict) -> None:

@@ -46,7 +46,11 @@ from modelgen.report import (
     build_report,
     contract_issue,
     emit,
+    file_entry,
     finding_issue,
+    plain_issue,
+    project_report,
+    unmapped_issues,
 )
 
 if TYPE_CHECKING:
@@ -136,12 +140,12 @@ def _print_findings(findings: list[Finding]) -> None:
 
 
 def _notify(message: str) -> None:
-    console.print(f"[yellow]{escape(message)}[/yellow]")
+    err_console.print(f"[yellow]{escape(message)}[/yellow]")
 
 
 def _print_problems(problems: list[Problem]) -> None:
     for p in problems:
-        console.print(
+        err_console.print(
             f"[red]Error[/red] {escape(f'[{p.layer}] {p.label}: {p.message}')}"
         )
 
@@ -264,6 +268,7 @@ def gen(
         " [bold]modelgen schema[/bold]) or 'sources' (sources yml for"
         " extract contracts, same as [bold]modelgen sources[/bold]).",
     ),
+    output_format: OutputFormat = _FORMAT_OPTION,
 ):
     """
     Generate a dbt model layer from a YAML data contract.
@@ -303,8 +308,9 @@ def gen(
             )
             raise typer.Exit(ExitCode.USAGE)
         _write_schema(
-            contract, output, dry_run, table, server,
+            "gen", contract, output, dry_run, table, server,
             sources=layer_opt == "sources",
+            as_json=output_format is OutputFormat.JSON,
         )  # fmt: skip
         return
 
@@ -316,6 +322,15 @@ def gen(
 
     layer = Layer.RAW if raw else Layer.STAGING
     from_contract = from_contract or not introspect
+    as_json = output_format is OutputFormat.JSON
+    issues: list[dict] = []
+    entries: list[dict] = []
+
+    def finish(code: ExitCode) -> None:
+        if as_json:
+            emit(build_report("gen", code, [contract], issues, entries))
+        if code:
+            raise typer.Exit(code)
 
     try:
         events = EventContract.from_file_all(
@@ -323,22 +338,30 @@ def gen(
         )
     except ContractError as e:
         err_console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
-        raise typer.Exit(ExitCode.INVALID)
+        issues.extend(contract_issue(contract, i) for i in e.issues)
+        finish(ExitCode.INVALID)
+        return
 
     failed = 0
+    positions = node_positions(read_contract(contract)) if as_json else {}
     for event in events:
         lint_errs = _lint_errors(event)
         if lint_errs:
             err_console.print(f"[bold]{event.name}[/bold]")
             _print_findings(lint_errs)
             failed += len(lint_errs)
+            issues.extend(
+                finding_issue(contract, f, event.name, positions)
+                for f in lint_errs
+            )
     if failed:
         err_console.print(
             f"[red]Contract failed lint with {failed}"
             " error(s).[/red] Run [bold]modelgen validate[/bold]"
             " for the full report."
         )
-        raise typer.Exit(ExitCode.LINT)
+        finish(ExitCode.LINT)
+        return
 
     from modelgen.introspect import IntrospectorChooser
 
@@ -367,19 +390,21 @@ def gen(
             else event.staging_model_name
         )
 
-        console.print(
-            Panel(
-                f"[bold]Event:[/bold]      {event.name}\n"
-                f"[bold]Layer:[/bold]      {layer.value}\n"
-                f"[bold]Source:[/bold]     {event.source.fqn}\n"
-                f"[bold]Target:[/bold]     {target_dataset}.{target_model}\n"
-                f"[bold]Unique key:[/bold] {', '.join(event.unique_key)}"
-                f"  [bold]Loaded at:[/bold] {event.loaded_at_field}",
-                title="[bold green]👻 modelgen[/bold green]",
-                subtitle=f"[dim]{mode_subtitle}[/dim]",
-                expand=False,
+        if not as_json:
+            console.print(
+                Panel(
+                    f"[bold]Event:[/bold]      {event.name}\n"
+                    f"[bold]Layer:[/bold]      {layer.value}\n"
+                    f"[bold]Source:[/bold]     {event.source.fqn}\n"
+                    f"[bold]Target:[/bold]     {target_dataset}."
+                    f"{target_model}\n"
+                    f"[bold]Unique key:[/bold] {', '.join(event.unique_key)}"
+                    f"  [bold]Loaded at:[/bold] {event.loaded_at_field}",
+                    title="[bold green]👻 modelgen[/bold green]",
+                    subtitle=f"[dim]{mode_subtitle}[/dim]",
+                    expand=False,
+                )
             )
-        )
 
         try:
             result = generate(
@@ -396,25 +421,42 @@ def gen(
             err_console.print(
                 "[dim]Fix the contract or the source. Then try again.[/dim]"
             )
-            raise typer.Exit(
-                ExitCode.ENVIRONMENT
-                if isinstance(e, IntrospectionError)
-                else ExitCode.INVALID
+            introspection = isinstance(e, IntrospectionError)
+            issues.append(
+                plain_issue(
+                    contract,
+                    "introspection" if introspection else "generation",
+                    str(e),
+                    object_name=event.name,
+                )
             )
+            finish(ExitCode.ENVIRONMENT if introspection else ExitCode.INVALID)
+            return
         results.append((event, result))
 
     table_out = Table(show_header=True, header_style="bold cyan")
     table_out.add_column("File")
     table_out.add_column("Status")
     for _, result in results:
-        for path in result.written:
+        for path, content in zip(
+            result.written, result.artefacts.values(), strict=True
+        ):
             status = (
                 "[yellow]dry-run[/yellow]"
                 if dry_run
                 else "[green]written[/green]"
             )
             table_out.add_row(str(path), status)
-    console.print(table_out)
+            entries.append(
+                file_entry(
+                    path,
+                    layer.value,
+                    content,
+                    "dry_run" if dry_run else "written",
+                )
+            )
+    if not as_json:
+        console.print(table_out)
 
     for event, result in results:
         if result.new_source_columns:
@@ -432,9 +474,29 @@ def gen(
                     border_style="yellow",
                 )
             )
+    finish(ExitCode.OK)
 
 
-def _require_patterns(cfg: ModelgenConfig) -> None:
+def _stop(
+    command: str,
+    code: ExitCode,
+    output_format: OutputFormat,
+    cfg: ModelgenConfig | None = None,
+    message: str = "",
+) -> None:
+    if output_format is OutputFormat.JSON:
+        issues = (
+            [plain_issue(cfg.root if cfg else ".", "contract", message)]
+            if message
+            else []
+        )
+        emit(build_report(command, code, [], issues, []))
+    raise typer.Exit(code)
+
+
+def _require_patterns(
+    cfg: ModelgenConfig, command: str, output_format: OutputFormat
+) -> None:
     """Exit INVALID when a schema or sources pattern matches nothing."""
     for key, pattern, files in (
         (
@@ -449,14 +511,21 @@ def _require_patterns(cfg: ModelgenConfig) -> None:
         ),
     ):
         if pattern and not files:
-            console.print(
+            err_console.print(
                 f"[red]Error:[/red] {key} pattern"
                 f" [dim]{pattern!r}[/dim] matched nothing in {cfg.root}"
             )
-            raise typer.Exit(ExitCode.INVALID)
+            _stop(
+                command,
+                ExitCode.INVALID,
+                output_format,
+                cfg,
+                f"{key} pattern {pattern!r} matched nothing in {cfg.root}",
+            )
 
 
 def _write_schema(
+    command: str,
     contract: Path,
     output: Path,
     dry_run: bool,
@@ -465,9 +534,20 @@ def _write_schema(
     strict: bool = False,
     sources: bool = False,
     tests_output: Path | None = None,
+    as_json: bool = False,
 ) -> None:
     from modelgen.schema_mode import render_schema
     from modelgen.sources_mode import render_sources
+
+    layer = "sources" if sources else "schema"
+    issues: list[dict] = []
+    entries: list[dict] = []
+
+    def finish(code: ExitCode) -> None:
+        if as_json:
+            emit(build_report(command, code, [contract], issues, entries))
+        if code:
+            raise typer.Exit(code)
 
     unmapped: list[str] = []
     try:
@@ -479,7 +559,10 @@ def _write_schema(
             )
     except ContractError as e:
         err_console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
-        raise typer.Exit(ExitCode.INVALID)
+        issues.extend(contract_issue(contract, i) for i in e.issues)
+        finish(ExitCode.INVALID)
+        return
+    status = "dry_run" if dry_run else "written"
     for filename, content in files.items():
         dest = _dest(output, filename, tests_output)
         if not dry_run:
@@ -487,17 +570,29 @@ def _write_schema(
                 write_generated(dest, content, output, tests_output)
             except GenerationError as e:
                 err_console.print(f"[red]{escape(str(e))}[/red]")
-                raise typer.Exit(ExitCode.INVALID)
-        status = "dry-run" if dry_run else "written"
-        console.print(f"{escape(str(dest))} {status}", highlight=False)
+                issues.append(plain_issue(contract, "generation", str(e)))
+                finish(ExitCode.INVALID)
+                return
+        entries.append(file_entry(dest, layer, content, status))
+        if not as_json:
+            label = "dry-run" if dry_run else "written"
+            console.print(f"{escape(str(dest))} {label}", highlight=False)
     if unmapped:
         typer.echo(
             f"modelgen: {len(unmapped)} quality rule(s) not mapped:"
             f" {', '.join(unmapped)}",
             err=True,
         )
-        if strict:
-            raise typer.Exit(ExitCode.LINT)
+        failed = strict
+        issues.extend(
+            unmapped_issues(
+                contract, unmapped, "error" if failed else "warning"
+            )
+        )
+        if failed:
+            finish(ExitCode.LINT)
+            return
+    finish(ExitCode.OK)
 
 
 @app.command()
@@ -535,6 +630,7 @@ def schema(
             " directory instead of <output>/tests/."
         ),
     ),
+    output_format: OutputFormat = _FORMAT_OPTION,
 ):
     """
     Generate models yml for tables the project PRODUCES.
@@ -551,8 +647,9 @@ def schema(
     """
     _configure_logging(verbose, err_console)
     _write_schema(
-        contract, output, dry_run, table, server, strict,
+        "schema", contract, output, dry_run, table, server, strict,
         tests_output=tests_output,
+        as_json=output_format is OutputFormat.JSON,
     )  # fmt: skip
 
 
@@ -590,6 +687,7 @@ def sources(
             " directory instead of <output>/tests/."
         ),
     ),
+    output_format: OutputFormat = _FORMAT_OPTION,
 ):
     """
     Generate a sources yml for tables the project READS (extract contracts).
@@ -604,8 +702,9 @@ def sources(
     """
     _configure_logging(verbose, err_console)
     _write_schema(
-        contract, output, dry_run, table, None, strict, sources=True,
-        tests_output=tests_output,
+        "sources", contract, output, dry_run, table, None, strict,
+        sources=True, tests_output=tests_output,
+        as_json=output_format is OutputFormat.JSON,
     )  # fmt: skip
 
 
@@ -716,6 +815,7 @@ def run(
     ),
     introspect: bool = _INTROSPECT_OPTION,
     server: str | None = _SERVER_OPTION,
+    output_format: OutputFormat = _FORMAT_OPTION,
 ):
     """
     Find all contracts and regenerate everything .modelgen.yml names.
@@ -749,38 +849,40 @@ def run(
         else:
             cfg = ModelgenConfig.discover(Path.cwd())
     except ConfigError as e:
-        console.print(f"[red]Config error:[/red] {e}")
-        raise typer.Exit(ExitCode.INVALID)
+        err_console.print(f"[red]Config error:[/red] {e}")
+        _stop("run", ExitCode.INVALID, output_format, None, str(e))
 
     contract_files = cfg.contract_files()
-    _require_patterns(cfg)
+    _require_patterns(cfg, "run", output_format)
     if (
         not contract_files
         and not cfg.schema_contract_files()
         and not cfg.sources_contract_files()
     ):
-        console.print(
+        err_console.print(
             f"[yellow]No contracts found.[/yellow] "
             f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
             f" matched nothing in {cfg.root}"
         )
-        raise typer.Exit(ExitCode.OK)
+        _stop("run", ExitCode.OK, output_format)
 
-    console.print(
-        Panel(
-            f"[bold]Contracts:[/bold]       {len(contract_files)}\n"
-            f"[bold]Root:[/bold]            {cfg.root}\n"
-            f"[bold]Raw output:[/bold]      {cfg.raw_output}\n"
-            f"[bold]Staging output:[/bold]  {cfg.staging_output}",
-            title="[bold green]👻 modelgen run[/bold green]",
-            subtitle=(
-                "[dim]contract-only introspection[/dim]"
-                if from_contract
-                else None
-            ),
-            expand=False,
+    as_json = output_format is OutputFormat.JSON
+    if not as_json:
+        console.print(
+            Panel(
+                f"[bold]Contracts:[/bold]       {len(contract_files)}\n"
+                f"[bold]Root:[/bold]            {cfg.root}\n"
+                f"[bold]Raw output:[/bold]      {cfg.raw_output}\n"
+                f"[bold]Staging output:[/bold]  {cfg.staging_output}",
+                title="[bold green]👻 modelgen run[/bold green]",
+                subtitle=(
+                    "[dim]contract-only introspection[/dim]"
+                    if from_contract
+                    else None
+                ),
+                expand=False,
+            )
         )
-    )
 
     result = run_project(
         cfg,
@@ -789,6 +891,11 @@ def run(
         dry_run=dry_run,
         notify=_notify,
     )
+
+    if as_json:
+        _print_problems(result.problems)
+        emit(project_report("run", result))
+        raise typer.Exit(result.exit_code)
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Contract")
@@ -842,7 +949,10 @@ def check(
     diff: bool = typer.Option(
         False,
         "--diff",
-        help="Print a unified diff for every drifted file.",
+        help=(
+            "Print a unified diff for every drifted file. Ignored with"
+            " --format json."
+        ),
     ),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Enable debug logging."
@@ -857,6 +967,7 @@ def check(
     ),
     introspect: bool = _INTROSPECT_OPTION,
     server: str | None = _SERVER_OPTION,
+    output_format: OutputFormat = _FORMAT_OPTION,
 ):
     """
     Verify committed models match what the contracts would generate.
@@ -882,24 +993,29 @@ def check(
         else:
             cfg = ModelgenConfig.discover(Path.cwd())
     except ConfigError as e:
-        console.print(f"[red]Config error:[/red] {e}")
-        raise typer.Exit(ExitCode.INVALID)
+        err_console.print(f"[red]Config error:[/red] {e}")
+        _stop("check", ExitCode.INVALID, output_format, None, str(e))
 
     contract_files = cfg.contract_files()
     schema_files = cfg.schema_contract_files()
     sources_files = cfg.sources_contract_files()
-    _require_patterns(cfg)
+    _require_patterns(cfg, "check", output_format)
     if not contract_files and not schema_files and not sources_files:
-        console.print(
+        err_console.print(
             f"[yellow]No contracts found.[/yellow] "
             f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
             f" matched nothing in {cfg.root}"
         )
-        raise typer.Exit(ExitCode.OK)
+        _stop("check", ExitCode.OK, output_format)
 
     result = check_project(
         cfg, server=server, from_contract=from_contract, notify=_notify
     )
+
+    if output_format is OutputFormat.JSON:
+        _print_problems(result.problems)
+        emit(project_report("check", result))
+        raise typer.Exit(result.exit_code)
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Contract")
@@ -933,7 +1049,7 @@ def check(
     _print_problems(result.problems)
 
     if drifted or result.problems:
-        console.print(
+        err_console.print(
             f"[red]Drift detected:[/red] {len(drifted)} file(s) out of"
             f" sync, {len(result.problems)} error(s)."
             " Run [bold]modelgen run[/bold] and commit the result."

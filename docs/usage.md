@@ -62,11 +62,15 @@ stdout carries results only: tables, summaries, created paths, diffs and,
 with `--format json`, the report. stderr carries diagnostics: contract and
 config errors, lint findings, notices and warnings. This holds in both
 modes, so `modelgen validate contract.yml 2>/dev/null` prints only the
-summary of a contract that passed. (`run` and `check` still print their
-errors on stdout.)
+summary of a contract that passed. This includes `run` and `check`:
+their tables, summaries and diffs go to stdout, their errors and notices
+(`Config error`, `Drift detected`, the no-credentials notice) to stderr.
 
 `--format json` (default `text`, case-insensitive) makes a command print
-exactly one JSON document on stdout. Only `validate` takes it for now.
+exactly one JSON document on stdout, with no panels or tables. Six
+commands take it: `validate`, `gen`, `schema`, `sources`, `run` and `check`.
+`check --diff` is ignored with `--format json`: the document already
+carries each file's `sha256` and `on_disk_sha256`.
 
 ```bash
 modelgen validate contract.yml --format json

@@ -152,7 +152,7 @@ def test_run_mixed_project_without_credentials_notices_once(
     _mixed_project(tmp_path, monkeypatch)
     r = runner.invoke(app, ["run", "--introspect"])
     assert r.exit_code == 0, r.output
-    assert r.stdout.count(NOTICE) == 1
+    assert r.stderr.count(NOTICE) == 1
 
 
 @pytest.mark.parametrize("cmd", ["gen", "run"])
