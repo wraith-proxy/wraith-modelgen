@@ -39,11 +39,20 @@ so `run` then `check` is a clean round trip. The separate `schema` and
 
 ## Exit codes
 
-| Code | Meaning |
-|---|---|
-| `0` | Success, or for `check`, everything in sync |
-| `1` | A contract, config or generation error, drift, or a `--strict` failure |
-| `2` | Usage error: bad or conflicting flags, or a contract path that does not exist |
+| Code | Name | Meaning |
+|---|---|---|
+| `0` | OK | Success. For `check`, everything in sync. Also when no contracts are found. |
+| `1` | INVALID | A contract or `.modelgen.yml` is invalid: YAML or ODCS schema errors, an unsupported `apiVersion`, rejected input, a contract that does not match its source, or a config pattern that matches nothing. |
+| `2` | USAGE | Bad or conflicting flags, a path that does not exist, or an action refused until you pass a flag such as `--force`. |
+| `3` | LINT | Lint errors, or `--strict` with unmapped quality rules. |
+| `4` | DRIFT | `check` found generated files missing or out of sync. |
+| `5` | ENVIRONMENT | Credentials or warehouse failure: no GCP credentials where they are required, or introspection failed. |
+| `6` | INTERNAL | An unexpected error: a modelgen bug. |
+
+When one run hits more than one of these, it exits with the first that
+applies in this order: INTERNAL, ENVIRONMENT, INVALID, LINT, DRIFT.
+
+These codes are stable: a release will not change their meaning.
 
 ---
 
@@ -143,7 +152,8 @@ modelgen gen CONTRACT [OPTIONS]
 Exit `2`: neither or both of `--raw`/`--staging` given, `--layer` combined
 with them, an unknown `--layer` value, or `--server` with `--layer sources`.
 Exit `1`: the contract is invalid (including an unknown `--table` or
-`--server`), has lint errors, or generation or introspection failed.
+`--server`) or generation failed. Exit `3`: the contract has lint errors.
+Exit `5`: introspection failed.
 
 ```bash
 modelgen gen contract.yml --raw     -o ./models/raw
@@ -174,12 +184,12 @@ modelgen schema contracts/bus-marts.odcs.yaml -o models/marts --strict
 | `--dry-run` | Preview without writing |
 | `-t`, `--table NAME` | Repeatable. Unknown names exit `1` |
 | `-s`, `--server ID` | Pick the server by its `server:` id |
-| `--strict` | Exit `1` when any quality rule cannot be mapped |
+| `--strict` | Exit `3` when any quality rule cannot be mapped |
 | `-v`, `--verbose` | Debug logging |
 
 Unmapped rules are reported on stderr as `modelgen: N quality rule(s) not
 mapped: <model>.<rule>`. With `--strict`, files are still written before
-the exit `1`; with `--dry-run`, nothing is written but the exit `1` still
+the exit `3`; with `--dry-run`, nothing is written but the exit `3` still
 applies.
 
 ---
@@ -266,10 +276,11 @@ got committed all fail loudly:
 ```
 
 Exit `0`: in sync, or no contracts matched and no `schema_contracts` or
-`sources_contracts` pattern is set. Exit `1`: drift or missing files, a
-contract that fails to parse, lint or introspect, a malformed
-`.modelgen.yml`, or a `schema_contracts`/`sources_contracts` pattern that
-matches no files.
+`sources_contracts` pattern is set. Exit `4`: drift or missing files. A
+contract that fails to parse (`1`), lint (`3`) or introspect (`5`), a
+malformed `.modelgen.yml` (`1`), or a `schema_contracts`/`sources_contracts`
+pattern that matches no files (`1`) exits with its own code; with several
+failures the precedence above applies.
 
 ---
 

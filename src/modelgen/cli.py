@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import click
 import typer
+import typer.core
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.markup import escape
@@ -13,6 +16,7 @@ from rich.table import Table
 
 from modelgen import __version__
 from modelgen.contract import ContractError, EventContract
+from modelgen.exit_codes import ExitCode, worst
 from modelgen.generator import (
     GenerationError,
     GenerationResult,
@@ -28,7 +32,32 @@ from modelgen.lint import warnings as lint_warnings
 if TYPE_CHECKING:
     from modelgen.config import ModelgenConfig
 
+
+class _Group(typer.core.TyperGroup):
+    def invoke(self, ctx: click.Context) -> Any:
+        try:
+            return super().invoke(ctx)
+        except (
+            click.exceptions.Exit,
+            click.exceptions.Abort,
+            click.ClickException,
+            SystemExit,
+            KeyboardInterrupt,
+        ):
+            raise
+        except Exception as e:
+            typer.echo(
+                f"modelgen: internal error: {type(e).__name__}: {e}."
+                " This is a bug; run with --verbose for the traceback.",
+                err=True,
+            )
+            if logging.getLogger().isEnabledFor(logging.DEBUG):
+                typer.echo(traceback.format_exc(), err=True, nl=False)
+            raise typer.Exit(ExitCode.INTERNAL) from e
+
+
 app = typer.Typer(
+    cls=_Group,
     name="modelgen",
     help=(
         "[bold cyan]👻[/bold cyan] dbt model scaffolder for BigQuery and"
@@ -216,13 +245,13 @@ def gen(
                 "[red]--layer only accepts 'schema' or 'sources', and not"
                 " together with --raw or --staging.[/red]"
             )
-            raise typer.Exit(2)
+            raise typer.Exit(ExitCode.USAGE)
         if layer_opt == "sources" and server is not None:
             console.print(
                 "[red]--server does not apply to --layer sources: sources"
                 " yml is dialect-independent.[/red]"
             )
-            raise typer.Exit(2)
+            raise typer.Exit(ExitCode.USAGE)
         _write_schema(
             contract, output, dry_run, table, server,
             sources=layer_opt == "sources",
@@ -231,7 +260,7 @@ def gen(
 
     if raw == staging:
         console.print("[red]Specify exactly one of --raw or --staging.[/red]")
-        raise typer.Exit(2)
+        raise typer.Exit(ExitCode.USAGE)
 
     layer = Layer.RAW if raw else Layer.STAGING
     from_contract = from_contract or not introspect
@@ -242,7 +271,7 @@ def gen(
         )
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.INVALID)
 
     failed = 0
     for event in events:
@@ -257,7 +286,7 @@ def gen(
             " error(s).[/red] Run [bold]modelgen validate[/bold]"
             " for the full report."
         )
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.LINT)
 
     from modelgen.introspect import IntrospectorChooser
 
@@ -313,19 +342,11 @@ def gen(
             console.print(
                 "[dim]Fix the contract or the source. Then try again.[/dim]"
             )
-            raise typer.Exit(1)
-        except Exception as e:
-            console.print(
-                f"[red]Unexpected error ({event.name}):[/red]"
-                f" {type(e).__name__}: {e}"
+            raise typer.Exit(
+                ExitCode.ENVIRONMENT
+                if isinstance(e, IntrospectionError)
+                else ExitCode.INVALID
             )
-            console.print(
-                "[dim]This looks like a bug."
-                " Run with --verbose for the full traceback.[/dim]"
-            )
-            if verbose:
-                console.print_exception()
-            raise typer.Exit(1)
         results.append((event, result))
 
     table_out = Table(show_header=True, header_style="bold cyan")
@@ -368,7 +389,7 @@ def _dest(output: Path, filename: str, tests_output: Path | None) -> Path:
 
 
 def _require_patterns(cfg: ModelgenConfig) -> None:
-    """Exit 1 when a schema or sources contracts pattern matches nothing."""
+    """Exit INVALID when a schema or sources pattern matches nothing."""
     for key, pattern, files in (
         (
             "schema_contracts",
@@ -386,7 +407,7 @@ def _require_patterns(cfg: ModelgenConfig) -> None:
                 f"[red]Error:[/red] {key} pattern"
                 f" [dim]{pattern!r}[/dim] matched nothing in {cfg.root}"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(ExitCode.INVALID)
 
 
 def _produced_files(
@@ -447,7 +468,7 @@ def _write_schema(
             )
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.INVALID)
     for filename, content in files.items():
         dest = _dest(output, filename, tests_output)
         if not dry_run:
@@ -455,7 +476,7 @@ def _write_schema(
                 write_generated(dest, content, output, tests_output)
             except GenerationError as e:
                 console.print(f"[red]{escape(str(e))}[/red]")
-                raise typer.Exit(1)
+                raise typer.Exit(ExitCode.INVALID)
         status = "dry-run" if dry_run else "written"
         console.print(f"{escape(str(dest))} {status}", highlight=False)
     if unmapped:
@@ -465,7 +486,7 @@ def _write_schema(
             err=True,
         )
         if strict:
-            raise typer.Exit(1)
+            raise typer.Exit(ExitCode.LINT)
 
 
 @app.command()
@@ -493,7 +514,7 @@ def schema(
     strict: bool = typer.Option(
         False,
         "--strict",
-        help="Exit 1 when a quality rule cannot be mapped to a dbt test.",
+        help="Exit 3 when a quality rule cannot be mapped to a dbt test.",
     ),
     tests_output: Path | None = typer.Option(
         None,
@@ -548,7 +569,7 @@ def sources(
     strict: bool = typer.Option(
         False,
         "--strict",
-        help="Exit 1 when a quality rule cannot be mapped to a dbt test.",
+        help="Exit 3 when a quality rule cannot be mapped to a dbt test.",
     ),
     tests_output: Path | None = typer.Option(
         None,
@@ -605,7 +626,7 @@ def validate(
         events = EventContract.from_file_all(contract, server=server)
     except ContractError as e:
         console.print(f"[red]Invalid contract:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.INVALID)
 
     failed = False
     for event in events:
@@ -636,7 +657,7 @@ def validate(
             f"  Warnings: {len(warns)}{exempt_note}"
         )
     if failed:
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.LINT)
 
 
 @app.command()
@@ -703,7 +724,7 @@ def run(
             cfg = ModelgenConfig.discover(Path.cwd())
     except ConfigError as e:
         console.print(f"[red]Config error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.INVALID)
 
     contract_files = cfg.contract_files()
     _require_patterns(cfg)
@@ -717,7 +738,7 @@ def run(
             f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
             f" matched nothing in {cfg.root}"
         )
-        raise typer.Exit(0)
+        raise typer.Exit(ExitCode.OK)
 
     chooser = IntrospectorChooser(
         from_contract,
@@ -748,14 +769,16 @@ def run(
     table.add_column("File")
     table.add_column("Status")
 
-    errors: list[tuple[str, str, str]] = []
+    errors: list[tuple[str, str, str, ExitCode]] = []
     new_cols_notices: list[tuple[str, list[str]]] = []
 
     for contract_path in contract_files:
         try:
             events = EventContract.from_file_all(contract_path, server=server)
         except ContractError as e:
-            errors.append((contract_path.name, "parse", str(e)))
+            errors.append(
+                (contract_path.name, "parse", str(e), ExitCode.INVALID)
+            )
             continue
 
         for event in events:
@@ -772,6 +795,7 @@ def run(
                         label,
                         "lint",
                         "; ".join(f.message for f in lint_errs),
+                        ExitCode.LINT,
                     )
                 )
                 continue
@@ -794,8 +818,10 @@ def run(
                 )
                 for p in raw_result.written:
                     table.add_row(contract_path.name, "raw", p.name, status)
-            except (GenerationError, IntrospectionError) as e:
-                errors.append((label, "raw", str(e)))
+            except GenerationError as e:
+                errors.append((label, "raw", str(e), ExitCode.INVALID))
+            except IntrospectionError as e:
+                errors.append((label, "raw", str(e), ExitCode.ENVIRONMENT))
 
             # Staging layer: skip if no columns declared
             if not event.staging.columns:
@@ -822,15 +848,19 @@ def run(
                     new_cols_notices.append(
                         (event.name, stg_result.new_source_columns)
                     )
-            except (GenerationError, IntrospectionError) as e:
-                errors.append((label, "staging", str(e)))
+            except GenerationError as e:
+                errors.append((label, "staging", str(e), ExitCode.INVALID))
+            except IntrospectionError as e:
+                errors.append((label, "staging", str(e), ExitCode.ENVIRONMENT))
 
     unmapped: list[str] = []
     for contract_path, mode, dest, content in _produced_files(
         cfg, server, unmapped
     ):
         if dest is None:
-            errors.append((contract_path.name, "parse", content))
+            errors.append(
+                (contract_path.name, "parse", content, ExitCode.INVALID)
+            )
             continue
         if not dry_run:
             try:
@@ -842,7 +872,9 @@ def run(
                     cfg.tests_output,
                 )
             except GenerationError as e:
-                errors.append((contract_path.name, mode, str(e)))
+                errors.append(
+                    (contract_path.name, mode, str(e), ExitCode.INVALID)
+                )
                 continue
         status = (
             "[yellow]dry-run[/yellow]" if dry_run else "[green]written[/green]"
@@ -871,11 +903,11 @@ def run(
         )
 
     if errors:
-        for name, layer_name, msg in errors:
+        for name, layer_name, msg, _ in errors:
             console.print(
                 f"[red]Error[/red] {escape(f'[{layer_name}] {name}: {msg}')}"
             )
-        raise typer.Exit(1)
+        raise typer.Exit(worst(code for *_, code in errors))
 
 
 @app.command()
@@ -913,7 +945,8 @@ def check(
 
     Renders every contract in memory and compares the output against the
     files on disk. Nothing is written. Exit code 0 means everything is
-    in sync; 1 means drift, missing files, or contract errors. Wire it
+    in sync; 4 means drift or missing files; contract errors exit with
+    their own code (1 invalid, 3 lint, 5 introspection). Wire it
     straight into CI next to your linter.
 
     \b
@@ -933,7 +966,7 @@ def check(
             cfg = ModelgenConfig.discover(Path.cwd())
     except ConfigError as e:
         console.print(f"[red]Config error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.INVALID)
 
     contract_files = cfg.contract_files()
     schema_files = cfg.schema_contract_files()
@@ -945,7 +978,7 @@ def check(
             f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
             f" matched nothing in {cfg.root}"
         )
-        raise typer.Exit(0)
+        raise typer.Exit(ExitCode.OK)
 
     chooser = IntrospectorChooser(
         from_contract,
@@ -960,7 +993,7 @@ def check(
     table.add_column("File")
     table.add_column("Status")
 
-    errors: list[tuple[str, str, str]] = []
+    errors: list[tuple[str, str, str, ExitCode]] = []
     drifted: list[tuple[Path, str, str]] = []  # path, on_disk, expected
     in_sync = 0
 
@@ -968,7 +1001,9 @@ def check(
         cfg, server, []
     ):
         if dest is None:
-            errors.append((contract_path.name, "parse", expected))
+            errors.append(
+                (contract_path.name, "parse", expected, ExitCode.INVALID)
+            )
             continue
         if not dest.exists():
             drifted.append((dest, "", expected))
@@ -985,7 +1020,9 @@ def check(
         try:
             events = EventContract.from_file_all(contract_path, server=server)
         except ContractError as e:
-            errors.append((contract_path.name, "parse", str(e)))
+            errors.append(
+                (contract_path.name, "parse", str(e), ExitCode.INVALID)
+            )
             continue
 
         for event in events:
@@ -1002,6 +1039,7 @@ def check(
                         label,
                         "lint",
                         "; ".join(f.message for f in lint_errs),
+                        ExitCode.LINT,
                     )
                 )
                 continue
@@ -1021,8 +1059,15 @@ def check(
                         layer=layer,
                         dry_run=True,
                     )
-                except (GenerationError, IntrospectionError) as e:
-                    errors.append((label, layer.value, str(e)))
+                except GenerationError as e:
+                    errors.append(
+                        (label, layer.value, str(e), ExitCode.INVALID)
+                    )
+                    continue
+                except IntrospectionError as e:
+                    errors.append(
+                        (label, layer.value, str(e), ExitCode.ENVIRONMENT)
+                    )
                     continue
 
                 for filename, expected in result.artefacts.items():
@@ -1056,7 +1101,7 @@ def check(
             console.print("".join(udiff), markup=False, highlight=False)
 
     if errors:
-        for name, layer_name, msg in errors:
+        for name, layer_name, msg, _ in errors:
             console.print(
                 f"[red]Error[/red] {escape(f'[{layer_name}] {name}: {msg}')}"
             )
@@ -1067,7 +1112,10 @@ def check(
             f" sync, {len(errors)} error(s)."
             " Run [bold]modelgen run[/bold] and commit the result."
         )
-        raise typer.Exit(1)
+        codes = [code for *_, code in errors]
+        if drifted:
+            codes.append(ExitCode.DRIFT)
+        raise typer.Exit(worst(codes))
 
     console.print(
         f"[green]Everything in sync.[/green] {in_sync} file(s) match"
@@ -1119,7 +1167,7 @@ def new(
             f"[red]Expected project.dataset.table,"
             f" got {escape(repr(table))}.[/red]"
         )
-        raise typer.Exit(2)
+        raise typer.Exit(ExitCode.USAGE)
     project, dataset, table_name = parts
 
     if not has_default_credentials():
@@ -1128,7 +1176,7 @@ def new(
             " introspect the source table. Run:\n"
             "  gcloud auth application-default login"
         )
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.ENVIRONMENT)
 
     try:
         columns = BigQueryIntrospector().get_columns(
@@ -1139,7 +1187,7 @@ def new(
         )
     except (IntrospectionError, ScaffoldError) as e:
         console.print(f"[red]Could not draft contract:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.ENVIRONMENT)
 
     event = EventContract.from_text(yaml_text)
     dest = output / f"{event.name}.yml"
@@ -1147,7 +1195,7 @@ def new(
         console.print(
             f"[red]{dest} already exists.[/red] Pass --force to overwrite."
         )
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.USAGE)
     output.mkdir(parents=True, exist_ok=True)
     dest.write_text(yaml_text)
 
@@ -1191,7 +1239,7 @@ def init(
         created = init_project(directory)
     except ScaffoldError as e:
         console.print(f"[yellow]{e}[/yellow]")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.USAGE)
 
     for path in created:
         console.print(f"[green]created[/green] {path}")

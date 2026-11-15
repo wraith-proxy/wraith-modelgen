@@ -180,7 +180,7 @@ def test_check_covers_all_objects(tmp_path):
     victim.write_text(victim.read_text() + "-- drift\n")
     (root / "models" / "raw" / "raw__localities.yml").unlink()
     bad = _cli("check", "--from-contract", cwd=root, check=False)
-    assert bad.returncode == 1
+    assert bad.returncode == 4
     out = bad.stdout
     assert "stg__line_punctuality.sql" in out
     assert "raw__localities.yml" in out
@@ -198,6 +198,6 @@ def test_validate_reports_error_in_later_object(tmp_path):
     bad = tmp_path / "bad.yml"
     bad.write_text(text)
     r = _cli("validate", str(bad), cwd=tmp_path, check=False)
-    assert r.returncode == 1
+    assert r.returncode == 3
     assert "invalid-column-type" in r.stdout
     assert "OK" in r.stdout  # the other objects still report

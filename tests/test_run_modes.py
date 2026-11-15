@@ -40,7 +40,7 @@ def test_run_writes_extract_yml_and_check_is_clean(tmp_path):
         "sources_contracts: contracts/*.odcs.yaml\n"
         "sources_output: models/staging\n",
     )
-    assert _cli("check", cwd=proj, check=False).returncode == 1
+    assert _cli("check", cwd=proj, check=False).returncode == 4
     _cli("run", cwd=proj)
     assert (proj / "models" / "staging" / SOURCES_YML).is_file()
     assert "in sync" in _cli("check", cwd=proj).stdout.lower()

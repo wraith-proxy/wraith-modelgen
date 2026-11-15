@@ -254,7 +254,7 @@ Quality rules map per layer.
   `nullValues` and `duplicateValues` to `not_null` and `unique`; `rowCount`
   with a bound to a row-count test. Other thresholds and `type: sql` rules
   become singular tests under `tests/generated/`. Anything unmapped is
-  reported on stderr, never dropped, and `--strict` exits 1 for it.
+  reported on stderr, never dropped, and `--strict` exits 3 for it.
 - `gen --staging` maps only property-level `rule: validValues` to
   `accepted_values` and reports nothing it skips. `gen --raw` emits no
   quality tests.
