@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 import modelgen.introspect as intro
 from modelgen.cli import app
-from modelgen.introspect import FakeIntrospector
+from tests.fakes import FakeIntrospector
 from tests.test_cli import _FAKE_COLUMNS, CONTRACT_YAML
 
 runner = CliRunner()

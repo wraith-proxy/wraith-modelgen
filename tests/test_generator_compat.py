@@ -20,7 +20,7 @@ from modelgen.generator import (
     render_raw,
     render_staging,
 )
-from modelgen.introspect import FakeIntrospector
+from tests.fakes import FakeIntrospector
 
 
 @pytest.fixture

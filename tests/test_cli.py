@@ -13,7 +13,8 @@ import pytest
 from typer.testing import CliRunner
 
 from modelgen.cli import app
-from modelgen.introspect import FakeIntrospector, IntrospectedColumn
+from modelgen.introspect import IntrospectedColumn
+from tests.fakes import FakeIntrospector
 
 runner = CliRunner()
 

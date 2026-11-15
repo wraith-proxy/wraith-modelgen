@@ -12,8 +12,10 @@ from pathlib import Path
 
 import yaml
 
+from modelgen.errors import ModelgenError
 
-class ConfigError(ValueError):
+
+class ConfigError(ModelgenError, ValueError):
     """Raised when .modelgen.yml is malformed."""
 
 

@@ -30,6 +30,7 @@ from modelgen.dialect import Dialect, get_dialect
 from modelgen.dialect import render_cluster_by as _render_cluster_by
 from modelgen.dialect import staging_name_for as _staging_name_for
 from modelgen.dialect import staging_unique_key_dbt as _staging_unique_key_dbt
+from modelgen.errors import ModelgenError
 from modelgen.introspect import IntrospectedColumn, Introspector
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ class Layer(str, Enum):
     STAGING = "staging"
 
 
-class GenerationError(RuntimeError):
+class GenerationError(ModelgenError, RuntimeError):
     """Raised when generation fails for reasons other than contract parsing."""
 
 

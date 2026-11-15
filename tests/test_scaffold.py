@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from modelgen.cli import app
 from modelgen.contract import EventContract
-from modelgen.introspect import FakeIntrospector, IntrospectedColumn
+from modelgen.introspect import IntrospectedColumn
 from modelgen.lint import errors, lint_contract
 from modelgen.scaffold import (
     ScaffoldError,
@@ -19,6 +19,7 @@ from modelgen.scaffold import (
     guess_unique_key,
     init_project,
 )
+from tests.fakes import FakeIntrospector
 
 runner = CliRunner()
 

@@ -19,12 +19,12 @@ from modelgen.contract import ContractError, EventContract
 from modelgen.generator import GenerationError, Layer, generate
 from modelgen.introspect import (
     ContractIntrospector,
-    FakeIntrospector,
     IntrospectedColumn,
 )
 from modelgen.lint import lint_contract
 from modelgen.schema_mode import render_schema
 from modelgen.sources_mode import render_sources
+from tests.fakes import FakeIntrospector
 
 ROOT = Path(__file__).parent.parent
 EXAMPLE_PATH = ROOT / "contracts" / "example_contract.yml"

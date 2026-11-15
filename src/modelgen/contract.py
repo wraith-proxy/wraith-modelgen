@@ -58,13 +58,14 @@ from modelgen.dialect import (
     get_dialect,
     supported_server_types,
 )
+from modelgen.errors import ModelgenError
 
 ODCS_API_VERSION = "v3.0.2"
 SUPPORTED_ODCS_VERSIONS = ("v3.0.2", "v3.1.0", "v3.2.0")
 _SCHEMA_DIR = Path(__file__).parent / "schema"
 
 
-class ContractError(ValueError):
+class ContractError(ModelgenError, ValueError):
     """Raised when a contract is malformed or references invalid state."""
 
 

@@ -13,11 +13,13 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Protocol
 
+from modelgen.errors import ModelgenError
+
 if TYPE_CHECKING:
     from modelgen.contract import EventContract
 
 
-class UnknownDialectError(ValueError):
+class UnknownDialectError(ModelgenError, ValueError):
     """Raised when a server type has no registered dialect."""
 
 

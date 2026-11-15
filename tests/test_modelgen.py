@@ -27,10 +27,10 @@ from modelgen.generator import (
 )
 from modelgen.introspect import (
     ContractIntrospector,
-    FakeIntrospector,
     IntrospectedColumn,
     IntrospectionError,
 )
+from tests.fakes import FakeIntrospector
 
 # ---------------------------------------------------------------------------
 # Fixtures

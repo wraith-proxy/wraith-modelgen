@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml
 
 from modelgen.contract import ODCS_API_VERSION
+from modelgen.errors import ModelgenError
 from modelgen.introspect import IntrospectedColumn
 
 _KEY_HINT = re.compile(r"(^|_)(id|key|guid|uuid)$", re.IGNORECASE)
@@ -57,7 +58,7 @@ def _logical_type(col: IntrospectedColumn) -> str:
     return _LOGICAL_TYPE.get(col.field_type, "string")
 
 
-class ScaffoldError(ValueError):
+class ScaffoldError(ModelgenError, ValueError):
     """Raised when scaffolding cannot proceed."""
 
 
