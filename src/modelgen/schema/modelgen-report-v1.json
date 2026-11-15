@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "modelgen report, schema version 1",
+  "description": "The document a modelgen command prints on stdout with --format json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool",
+    "tool_version",
+    "command",
+    "exit_code",
+    "ok",
+    "inputs",
+    "issues",
+    "files"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tool": { "const": "modelgen" },
+    "tool_version": { "type": "string" },
+    "command": { "type": "string" },
+    "exit_code": { "type": "integer", "minimum": 0 },
+    "ok": { "type": "boolean" },
+    "inputs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/input" }
+    },
+    "issues": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/issue" }
+    },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/file" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "object",
+        "code",
+        "severity",
+        "message",
+        "pointer",
+        "line",
+        "column",
+        "exempt_reason"
+      ],
+      "properties": {
+        "source": { "type": "string" },
+        "object": { "type": ["string", "null"] },
+        "code": { "type": "string" },
+        "severity": { "enum": ["error", "warning"] },
+        "message": { "type": "string" },
+        "pointer": { "type": ["string", "null"] },
+        "line": { "type": ["integer", "null"], "minimum": 1 },
+        "column": { "type": ["integer", "null"], "minimum": 1 },
+        "exempt_reason": { "type": ["string", "null"] }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "layer", "sha256", "status", "on_disk_sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "layer": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "status": {
+          "enum": ["written", "dry_run", "in_sync", "drift", "missing"]
+        },
+        "on_disk_sha256": {
+          "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        }
+      }
+    }
+  }
+}

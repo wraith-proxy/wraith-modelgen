@@ -199,5 +199,5 @@ def test_validate_reports_error_in_later_object(tmp_path):
     bad.write_text(text)
     r = _cli("validate", str(bad), cwd=tmp_path, check=False)
     assert r.returncode == 3
-    assert "invalid-column-type" in r.stdout
+    assert "invalid-column-type" in r.stderr
     assert "OK" in r.stdout  # the other objects still report

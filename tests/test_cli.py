@@ -216,6 +216,24 @@ class TestGenCommand:
         )
         assert "EXTRA_COL" in strip_ansi(result.output)
 
+    def test_schema_evolution_notice_stays_off_stdout(
+        self, contract_file, tmp_path
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "gen",
+                str(contract_file),
+                "--staging",
+                "--introspect",
+                "-o",
+                str(tmp_path),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "not yet in staging contract" in strip_ansi(result.stderr)
+        assert "not yet in staging contract" not in strip_ansi(result.stdout)
+
     def test_neither_flag_exits_2(self, contract_file, tmp_path):
         result = runner.invoke(
             app, ["gen", str(contract_file), "-o", str(tmp_path)]

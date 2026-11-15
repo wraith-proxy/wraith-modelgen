@@ -56,6 +56,60 @@ These codes are stable: a release will not change their meaning.
 
 ---
 
+## Machine-readable output
+
+stdout carries results only: tables, summaries, created paths, diffs and,
+with `--format json`, the report. stderr carries diagnostics: contract and
+config errors, lint findings, notices and warnings. This holds in both
+modes, so `modelgen validate contract.yml 2>/dev/null` prints only the
+summary of a contract that passed. (`run` and `check` still print their
+errors on stdout.)
+
+`--format json` (default `text`, case-insensitive) makes a command print
+exactly one JSON document on stdout. Only `validate` takes it for now.
+
+```bash
+modelgen validate contract.yml --format json
+```
+
+The document is described by the JSON Schema
+[`modelgen-report-v1.json`](https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/src/branch/main/src/modelgen/schema/modelgen-report-v1.json)
+(draft 2020-12), which also ships in the package at
+`modelgen/schema/modelgen-report-v1.json`.
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | `1`. Bumped only when the document changes incompatibly. |
+| `tool`, `tool_version` | `"modelgen"` and the installed version. |
+| `command` | The command that ran, e.g. `"validate"`. |
+| `exit_code` | The process exit status (see [Exit codes](#exit-codes)). |
+| `ok` | `true` when `exit_code` is `0`. |
+| `inputs` | One entry per contract read: `path` as given and the `sha256` of the file's bytes. |
+| `issues` | Every problem found, see below. For a contract that passes, the lint warnings and exempted findings. |
+| `files` | Generated files: `path`, `layer`, `sha256` of the generated content, `status` (`written`, `dry_run`, `in_sync`, `drift` or `missing`) and `on_disk_sha256` (`null` when not compared). Empty for `validate`. |
+
+Each issue has:
+
+| Field | Meaning |
+|---|---|
+| `source` | The contract path. |
+| `object` | The schema object (event) name when known, else `null`. |
+| `code` | A lint rule code (see [linting](linting.md)), or `schema.<keyword>`, `yaml`, `limit`, `odcs-version` or `contract` for a contract that could not be read. |
+| `severity` | `error` or `warning`. |
+| `message` | The human-readable message. |
+| `pointer` | JSON pointer into the contract (`""` is the document root), or `null`. |
+| `line`, `column` | 1-based position in the file, or `null`. |
+| `exempt_reason` | The `modelgenExempt` reason for an exempted finding, else `null`. |
+
+A contract that fails the ODCS schema exits `1` with one issue per schema
+error; lint errors exit `3` with one issue per finding.
+
+Usage errors (exit `2`) are the exception: bad or unknown flags are
+rejected while the command line is parsed, before any command runs, so
+they print text on stderr and no document.
+
+---
+
 ## Commands
 
 Every command takes `--help`.
@@ -106,7 +160,7 @@ Offline validation: YAML structure first, then a full semantic lint.
 No BigQuery credentials or network access needed.
 
 ```bash
-modelgen validate contract.yml [--strict] [--server ID]
+modelgen validate contract.yml [--strict] [--server ID] [--format json]
 ```
 
 All findings are reported in one pass: typo'd incremental strategies,

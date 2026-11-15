@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,7 +16,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from modelgen import __version__
-from modelgen.contract import ContractError, EventContract
+from modelgen.contract import (
+    ContractError,
+    EventContract,
+    node_positions,
+    read_contract,
+)
 from modelgen.exit_codes import ExitCode
 from modelgen.generator import (
     GenerationError,
@@ -35,6 +41,12 @@ from modelgen.project import (
     _lint_errors,
     check_project,
     run_project,
+)
+from modelgen.report import (
+    build_report,
+    contract_issue,
+    emit,
+    finding_issue,
 )
 
 if TYPE_CHECKING:
@@ -79,6 +91,7 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 console = Console()
+err_console = Console(stderr=True)
 
 
 def _version_callback(value: bool) -> None:
@@ -116,7 +129,7 @@ def _print_findings(findings: list[Finding]) -> None:
             if f.exempted
             else ""
         )
-        console.print(
+        err_console.print(
             f"[{colour}]{label}[/{colour}] [dim]{f.code}[/dim]"
             f" {f.message}{why}"
         )
@@ -159,6 +172,22 @@ _SERVER_OPTION = typer.Option(
         " supports."
     ),
 )
+
+
+class OutputFormat(str, Enum):
+    TEXT = "text"
+    JSON = "json"
+
+
+_FORMAT_OPTION = typer.Option(
+    OutputFormat.TEXT,
+    "--format",
+    case_sensitive=False,
+    help=(
+        "'text' for people, or 'json' for one machine-readable report on"
+        " stdout."
+    ),
+)
 _INTROSPECT_OPTION = typer.Option(
     False,
     "--introspect",
@@ -170,17 +199,16 @@ _INTROSPECT_OPTION = typer.Option(
 )
 
 
-def _configure_logging(verbose: bool) -> None:
+def _configure_logging(verbose: bool, out: Console = console) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
         format="%(message)s",
         datefmt="[%X]",
         handlers=[
-            RichHandler(
-                console=console, rich_tracebacks=False, show_path=False
-            )
+            RichHandler(console=out, rich_tracebacks=False, show_path=False)
         ],
+        force=True,
     )
 
 
@@ -259,17 +287,17 @@ def gen(
     A contract with several schema objects generates one model per object,
     in contract order.
     """
-    _configure_logging(verbose)
+    _configure_logging(verbose, err_console)
 
     if layer_opt is not None:
         if layer_opt not in ("schema", "sources") or raw or staging:
-            console.print(
+            err_console.print(
                 "[red]--layer only accepts 'schema' or 'sources', and not"
                 " together with --raw or --staging.[/red]"
             )
             raise typer.Exit(ExitCode.USAGE)
         if layer_opt == "sources" and server is not None:
-            console.print(
+            err_console.print(
                 "[red]--server does not apply to --layer sources: sources"
                 " yml is dialect-independent.[/red]"
             )
@@ -281,7 +309,9 @@ def gen(
         return
 
     if raw == staging:
-        console.print("[red]Specify exactly one of --raw or --staging.[/red]")
+        err_console.print(
+            "[red]Specify exactly one of --raw or --staging.[/red]"
+        )
         raise typer.Exit(ExitCode.USAGE)
 
     layer = Layer.RAW if raw else Layer.STAGING
@@ -292,18 +322,18 @@ def gen(
             contract, server=server, tables=table
         )
     except ContractError as e:
-        console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
+        err_console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
         raise typer.Exit(ExitCode.INVALID)
 
     failed = 0
     for event in events:
         lint_errs = _lint_errors(event)
         if lint_errs:
-            console.print(f"[bold]{event.name}[/bold]")
+            err_console.print(f"[bold]{event.name}[/bold]")
             _print_findings(lint_errs)
             failed += len(lint_errs)
     if failed:
-        console.print(
+        err_console.print(
             f"[red]Contract failed lint with {failed}"
             " error(s).[/red] Run [bold]modelgen validate[/bold]"
             " for the full report."
@@ -316,7 +346,7 @@ def gen(
         from_contract,
         "[yellow]No GCP credentials found."
         " Generating from contract only.[/yellow]",
-        console.print,
+        err_console.print,
     )
     mode_subtitle = (
         "introspecting BigQuery…"
@@ -360,8 +390,10 @@ def gen(
                 dry_run=dry_run,
             )
         except (GenerationError, IntrospectionError) as e:
-            console.print(f"[red]Generation failed ({event.name}):[/red] {e}")
-            console.print(
+            err_console.print(
+                f"[red]Generation failed ({event.name}):[/red] {e}"
+            )
+            err_console.print(
                 "[dim]Fix the contract or the source. Then try again.[/dim]"
             )
             raise typer.Exit(
@@ -386,7 +418,7 @@ def gen(
 
     for event, result in results:
         if result.new_source_columns:
-            console.print(
+            err_console.print(
                 Panel(
                     f"[bold]{event.name}:"
                     f" {len(result.new_source_columns)} new source"
@@ -446,7 +478,7 @@ def _write_schema(
                 contract, server=server, tables=table, unmapped=unmapped
             )
     except ContractError as e:
-        console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
+        err_console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
         raise typer.Exit(ExitCode.INVALID)
     for filename, content in files.items():
         dest = _dest(output, filename, tests_output)
@@ -454,7 +486,7 @@ def _write_schema(
             try:
                 write_generated(dest, content, output, tests_output)
             except GenerationError as e:
-                console.print(f"[red]{escape(str(e))}[/red]")
+                err_console.print(f"[red]{escape(str(e))}[/red]")
                 raise typer.Exit(ExitCode.INVALID)
         status = "dry-run" if dry_run else "written"
         console.print(f"{escape(str(dest))} {status}", highlight=False)
@@ -517,7 +549,7 @@ def schema(
         modelgen schema contracts/bus-marts.odcs.yaml -o models/marts
         modelgen schema contract.yml --table eta_models --server prod
     """
-    _configure_logging(verbose)
+    _configure_logging(verbose, err_console)
     _write_schema(
         contract, output, dry_run, table, server, strict,
         tests_output=tests_output,
@@ -570,7 +602,7 @@ def sources(
     Examples:
         modelgen sources contracts/extract.odcs.yaml -o models/staging
     """
-    _configure_logging(verbose)
+    _configure_logging(verbose, err_console)
     _write_schema(
         contract, output, dry_run, table, None, strict, sources=True,
         tests_output=tests_output,
@@ -591,6 +623,7 @@ def validate(
         help="Treat warnings as errors. For CI gates with standards.",
     ),
     server: str | None = _SERVER_OPTION,
+    output_format: OutputFormat = _FORMAT_OPTION,
 ):
     """
     Validate a contract offline: structure first, then semantics.
@@ -601,16 +634,32 @@ def validate(
     all in one pass, before you spend a round-trip to the warehouse.
     Every schema object in the contract is validated.
     """
+    as_json = output_format is OutputFormat.JSON
+    out = err_console if as_json else console
+    issues: list[dict] = []
+
+    def finish(code: ExitCode) -> None:
+        if as_json:
+            emit(build_report("validate", code, [contract], issues, []))
+        if code:
+            raise typer.Exit(code)
+
     try:
         events = EventContract.from_file_all(contract, server=server)
     except ContractError as e:
-        console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
-        raise typer.Exit(ExitCode.INVALID)
+        err_console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
+        issues.extend(contract_issue(contract, i) for i in e.issues)
+        finish(ExitCode.INVALID)
+        return
 
+    positions = node_positions(read_contract(contract)) if as_json else {}
     failed = False
     for event in events:
         findings = lint_contract(event)
         _print_findings(findings)
+        issues.extend(
+            finding_issue(contract, f, event.name, positions) for f in findings
+        )
         errs = lint_errors(findings)
         warns = lint_warnings(findings)
         # Neither count includes exemptions, so a clean run with standing
@@ -620,7 +669,7 @@ def validate(
 
         if errs or (strict and warns):
             failed = True
-            console.print(
+            err_console.print(
                 f"[red]FAIL[/red] [bold]{event.name}[/bold]:"
                 f" {len(errs)} error(s), {len(warns)} warning(s)"
                 f"{exempt_note}"
@@ -628,15 +677,14 @@ def validate(
             )
             continue
 
-        console.print(
+        out.print(
             f"[green]OK[/green] [bold]{event.name}[/bold]\n"
             f"  Source:   {event.source.fqn}\n"
             f"  Key:      {', '.join(event.unique_key)}\n"
             f"  Columns:  {len(event.staging.columns)} staging declared\n"
             f"  Warnings: {len(warns)}{exempt_note}"
         )
-    if failed:
-        raise typer.Exit(ExitCode.LINT)
+    finish(ExitCode.LINT if failed else ExitCode.OK)
 
 
 @app.command()
@@ -939,7 +987,7 @@ def new(
 
     parts = table.split(".")
     if len(parts) != 3 or not all(parts):
-        console.print(
+        err_console.print(
             f"[red]Expected project.dataset.table,"
             f" got {escape(repr(table))}.[/red]"
         )
@@ -947,7 +995,7 @@ def new(
     project, dataset, table_name = parts
 
     if not has_default_credentials():
-        console.print(
+        err_console.print(
             "[red]No GCP credentials found.[/red] modelgen new needs to"
             " introspect the source table. Run:\n"
             "  gcloud auth application-default login"
@@ -962,13 +1010,13 @@ def new(
             project, dataset, table_name, columns, name=name
         )
     except (IntrospectionError, ScaffoldError) as e:
-        console.print(f"[red]Could not draft contract:[/red] {e}")
+        err_console.print(f"[red]Could not draft contract:[/red] {e}")
         raise typer.Exit(ExitCode.ENVIRONMENT)
 
     event = EventContract.from_text(yaml_text)
     dest = output / f"{event.name}.yml"
     if dest.exists() and not force:
-        console.print(
+        err_console.print(
             f"[red]{dest} already exists.[/red] Pass --force to overwrite."
         )
         raise typer.Exit(ExitCode.USAGE)
@@ -1014,7 +1062,7 @@ def init(
     try:
         created = init_project(directory)
     except ScaffoldError as e:
-        console.print(f"[yellow]{e}[/yellow]")
+        err_console.print(f"[yellow]{e}[/yellow]")
         raise typer.Exit(ExitCode.USAGE)
 
     for path in created:
