@@ -47,7 +47,7 @@ The SQL and type system of a warehouse, picked by a server's `type`. BigQuery an
 _Avoid_: engine, adapter (a dialect is the thing that varies; "adapter" is reserved for code-structure talk)
 
 **Contract-only introspection**:
-Taking a source table's columns from the contract's declarations instead of querying the warehouse. Forced with `--from-contract`; automatic when no BigQuery credentials exist.
+Taking a source table's columns from the contract's declarations instead of querying the warehouse. The default. `--introspect` opts into querying BigQuery, and falls back to this when no BigQuery credentials exist.
 _Avoid_: offline mode, contract-only mode (clashes with **Mode**)
 
 ### Privacy

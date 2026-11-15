@@ -18,6 +18,7 @@ from modelgen.generator import (
     GenerationResult,
     Layer,
     generate,
+    write_generated,
 )
 from modelgen.introspect import IntrospectionError
 from modelgen.lint import Finding, lint_contract
@@ -107,6 +108,15 @@ _SERVER_OPTION = typer.Option(
         " supports."
     ),
 )
+_INTROSPECT_OPTION = typer.Option(
+    False,
+    "--introspect",
+    help=(
+        "Query BigQuery for each source table's columns, using Application"
+        " Default Credentials. Off by default, so output depends on the"
+        " contract alone."
+    ),
+)
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -161,11 +171,11 @@ def gen(
         False,
         "--from-contract",
         help=(
-            "Skip BigQuery introspection. Types and column list come"
-            " from the contract's staging declarations. Used when GCP"
-            " credentials are unavailable."
+            "The default: types and column list come from the contract's"
+            " staging declarations. Kept so existing scripts keep working."
         ),
     ),
+    introspect: bool = _INTROSPECT_OPTION,
     table: list[str] | None = _TABLE_OPTION,
     server: str | None = _SERVER_OPTION,
     layer_opt: str | None = typer.Option(
@@ -183,17 +193,16 @@ def gen(
     [bold]--layer[/bold] (schema or sources). One layer per run.
     [bold]--server[/bold] is not accepted with [bold]--layer sources[/bold].
 
-    Pass [bold]--from-contract[/bold] to skip introspection (BigQuery or
-    DuckDB) and generate from the
-    contract alone. This also happens automatically when no GCP Application
-    Default Credentials are found.
+    Output comes from the contract alone. Pass [bold]--introspect[/bold]
+    to read the source table's columns from BigQuery instead; without GCP
+    Application Default Credentials that falls back to the contract.
 
     \b
     Examples:
         modelgen gen contract.yml --raw -o ./models/raw
         modelgen gen contract.yml --staging -o ./models/staging
         modelgen gen contract.yml --raw --dry-run
-        modelgen gen contract.yml --raw --from-contract
+        modelgen gen contract.yml --raw --introspect
         modelgen gen contract.yml --raw --table eta_models --server prod
 
     A contract with several schema objects generates one model per object,
@@ -225,6 +234,7 @@ def gen(
         raise typer.Exit(2)
 
     layer = Layer.RAW if raw else Layer.STAGING
+    from_contract = from_contract or not introspect
 
     try:
         events = EventContract.from_file_all(
@@ -441,8 +451,11 @@ def _write_schema(
     for filename, content in files.items():
         dest = _dest(output, filename, tests_output)
         if not dry_run:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content)
+            try:
+                write_generated(dest, content, output, tests_output)
+            except GenerationError as e:
+                console.print(f"[red]{escape(str(e))}[/red]")
+                raise typer.Exit(1)
         status = "dry-run" if dry_run else "written"
         console.print(f"{escape(str(dest))} {status}", highlight=False)
     if unmapped:
@@ -649,10 +662,11 @@ def run(
         False,
         "--from-contract",
         help=(
-            "Skip BigQuery introspection for all contracts. Types and"
-            " column list come from each contract's staging declarations."
+            "The default: types and column list come from each contract's"
+            " staging declarations. Kept so existing scripts keep working."
         ),
     ),
+    introspect: bool = _INTROSPECT_OPTION,
     server: str | None = _SERVER_OPTION,
 ):
     """
@@ -677,6 +691,7 @@ def run(
       models/staging/     <- generated staging models (output)
     """
     _configure_logging(verbose)
+    from_contract = from_contract or not introspect
 
     from modelgen.config import ConfigError, ModelgenConfig
     from modelgen.introspect import IntrospectorChooser
@@ -818,8 +833,17 @@ def run(
             errors.append((contract_path.name, "parse", content))
             continue
         if not dry_run:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content)
+            try:
+                write_generated(
+                    dest,
+                    content,
+                    cfg.schema_output,
+                    cfg.sources_output,
+                    cfg.tests_output,
+                )
+            except GenerationError as e:
+                errors.append((contract_path.name, mode, str(e)))
+                continue
         status = (
             "[yellow]dry-run[/yellow]" if dry_run else "[green]written[/green]"
         )
@@ -877,10 +901,11 @@ def check(
         False,
         "--from-contract",
         help=(
-            "Skip BigQuery introspection for all contracts. Types and"
-            " column list come from each contract's staging declarations."
+            "The default: types and column list come from each contract's"
+            " staging declarations. Kept so existing scripts keep working."
         ),
     ),
+    introspect: bool = _INTROSPECT_OPTION,
     server: str | None = _SERVER_OPTION,
 ):
     """
@@ -896,6 +921,7 @@ def check(
       modelgen check --diff
     """
     _configure_logging(verbose)
+    from_contract = from_contract or not introspect
 
     from modelgen.config import ConfigError, ModelgenConfig
     from modelgen.introspect import IntrospectorChooser

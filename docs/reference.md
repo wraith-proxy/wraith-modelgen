@@ -185,9 +185,10 @@ DuckDB limits, enforced by lint or generation:
   one. Otherwise the first server of a supported type, in contract order.
   Otherwise an error listing `bigquery, duckdb, local`.
 
-Introspection follows the dialect. `gen`, `run` and `check` query BigQuery only
-when the selected server uses the BigQuery dialect, Application Default
-Credentials exist, and `--from-contract` is absent. A DuckDB or local contract
+Introspection is opt-in and follows the dialect. With `--introspect`, `gen`,
+`run` and `check` query BigQuery only when the selected server uses the
+BigQuery dialect and Application Default Credentials exist. A DuckDB or local
+contract
 always uses contract-only introspection, with no "No GCP credentials" notice.
 `new` stays BigQuery-only.
 

@@ -44,6 +44,7 @@ classified column on the row.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -65,6 +66,43 @@ _SCHEMA_DIR = Path(__file__).parent / "schema"
 
 class ContractError(ValueError):
     """Raised when a contract is malformed or references invalid state."""
+
+
+# ponytail: fixed ceilings, far above any real contract. Make them
+# configurable if a legitimate contract ever reaches one.
+MAX_CONTRACT_BYTES = 1_000_000
+_MAX_NODES = 1_000_000
+_MAX_DEPTH = 64
+
+_JINJA = re.compile(r"\{\{|\{%|\{#")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f\x85  ]")
+_SAFE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+
+def has_jinja(text: str) -> bool:
+    """True if dbt would render part of `text` as Jinja."""
+    return bool(_JINJA.search(text))
+
+
+def safe_name(what: str, value: object) -> str:
+    """`value` as text that is safe in a filename and inside a quoted
+    Jinja argument. Anything else is a ContractError."""
+    text = str(value)
+    if not _SAFE_NAME.fullmatch(text):
+        raise ContractError(
+            f"{what} may contain only letters, digits, '_', '.' and '-';"
+            f" got {text!r}."
+        )
+    return text
+
+
+def read_contract(path: Path) -> str:
+    """The contract's text, unless the file is too large to be one."""
+    if path.stat().st_size > MAX_CONTRACT_BYTES:
+        raise ContractError(
+            f"Contract at {path} is larger than {MAX_CONTRACT_BYTES} bytes."
+        )
+    return path.read_text()
 
 
 @lru_cache(maxsize=None)
@@ -479,7 +517,7 @@ class EventContract:
 
     @classmethod
     def from_file(cls, path: Path) -> EventContract:
-        return cls.from_text(path.read_text(), source=str(path))
+        return cls.from_text(read_contract(path), source=str(path))
 
     @classmethod
     def from_file_all(
@@ -490,7 +528,7 @@ class EventContract:
         tables: list[str] | None = None,
     ) -> list[EventContract]:
         return cls.from_text_all(
-            path.read_text(), source=str(path), server=server, tables=tables
+            read_contract(path), source=str(path), server=server, tables=tables
         )
 
     @classmethod
@@ -626,16 +664,25 @@ def select_schema_objects(
 
 def _load_doc(text: str, source: str) -> dict[str, Any]:
     """Parse YAML and check it is a valid ODCS DataContract."""
+    if len(text) > MAX_CONTRACT_BYTES:
+        raise ContractError(
+            f"Contract at {source} is larger than {MAX_CONTRACT_BYTES} bytes."
+        )
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as e:
         raise ContractError(f"Failed to parse YAML at {source}: {e}") from e
+    except RecursionError as e:
+        raise ContractError(
+            f"Contract at {source} is nested too deeply to parse."
+        ) from e
 
     if not isinstance(doc, dict):
         raise ContractError(
             f"Contract root must be a mapping, got {type(doc).__name__}"
         )
 
+    _refuse_hostile_shape(doc, source)
     errors = odcs_schema_errors(doc)
     if errors:
         first = errors[0]
@@ -650,4 +697,44 @@ def _load_doc(text: str, source: str) -> dict[str, Any]:
         raise ContractError(
             f"kind must be 'DataContract', got {doc.get('kind')!r}."
         )
+    # Both land on a comment line at the top of every generated file.
+    for key in ("name", "version"):
+        if _CONTROL.search(str(doc.get(key) or "")):
+            raise ContractError(
+                f"Contract {key} must be one line with no control characters."
+            )
     return doc
+
+
+def _refuse_hostile_shape(doc: dict[str, Any], source: str) -> None:
+    """Bound the walk every later step makes, and keep Jinja out.
+
+    YAML aliases let a small file expand to billions of nodes once
+    something walks it, and dbt renders Jinja wherever it finds it in a
+    generated file, comments included.
+    """
+    seen = 0
+    stack: list[tuple[Any, int]] = [(doc, 0)]
+    while stack:
+        node, depth = stack.pop()
+        seen += 1
+        if seen > _MAX_NODES:
+            raise ContractError(
+                f"Contract at {source} expands to more than {_MAX_NODES}"
+                " nodes. YAML aliases are the usual cause."
+            )
+        if depth > _MAX_DEPTH:
+            raise ContractError(
+                f"Contract at {source} is nested more than {_MAX_DEPTH}"
+                " levels deep."
+            )
+        if isinstance(node, dict):
+            stack.extend((x, depth + 1) for kv in node.items() for x in kv)
+        elif isinstance(node, list):
+            stack.extend((x, depth + 1) for x in node)
+        elif isinstance(node, str) and has_jinja(node):
+            raise ContractError(
+                f"Contract at {source} contains Jinja delimiters"
+                f" ({{{{, {{% or {{#) in {node[:40]!r}. dbt would render"
+                " them in generated files."
+            )

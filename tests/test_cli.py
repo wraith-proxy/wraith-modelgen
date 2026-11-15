@@ -203,7 +203,15 @@ class TestGenCommand:
 
     def test_schema_evolution_panel_shown(self, contract_file, tmp_path):
         result = runner.invoke(
-            app, ["gen", str(contract_file), "--staging", "-o", str(tmp_path)]
+            app,
+            [
+                "gen",
+                str(contract_file),
+                "--staging",
+                "--introspect",
+                "-o",
+                str(tmp_path),
+            ],
         )
         assert "EXTRA_COL" in strip_ansi(result.output)
 
@@ -286,7 +294,14 @@ class TestGenCommand:
         )
         result = runner.invoke(
             app,
-            ["gen", str(contract_file), "--raw", "-o", str(tmp_path)],
+            [
+                "gen",
+                str(contract_file),
+                "--raw",
+                "--introspect",
+                "-o",
+                str(tmp_path),
+            ],
         )
         assert result.exit_code == 0, result.output
         output = strip_ansi(result.output)

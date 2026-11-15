@@ -20,6 +20,8 @@ from modelgen.contract import (
     ContractError,
     _load_doc,
     _select_server,
+    read_contract,
+    safe_name,
     select_schema_objects,
 )
 from modelgen.dialect import get_dialect
@@ -125,8 +127,11 @@ def render_schema(
     under `tests/generated/`. Quality rules that cannot be mapped are
     appended to `unmapped` as `<model>.<rule>`.
     """
-    doc = _load_doc(contract.read_text(), str(contract))
+    doc = _load_doc(read_contract(contract), str(contract))
     schemas, _ = select_schema_objects(doc, tables)
+    # The name becomes a test filename and a quoted ref() argument.
+    for obj in schemas:
+        safe_name("Schema object name", obj.get("name"))
 
     chosen = _select_server(doc.get("servers") or [], server)
     dialect = get_dialect(str(chosen["type"]))

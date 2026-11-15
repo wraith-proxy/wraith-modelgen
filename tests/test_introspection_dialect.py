@@ -44,7 +44,15 @@ def _project(tmp_path, monkeypatch, text: str) -> Path:
 
 def _gen(tmp_path, layer, contract: Path):
     return runner.invoke(
-        app, ["gen", str(contract), layer, "-o", str(tmp_path / "out")]
+        app,
+        [
+            "gen",
+            str(contract),
+            layer,
+            "--introspect",
+            "-o",
+            str(tmp_path / "out"),
+        ],
     )
 
 
@@ -59,7 +67,7 @@ def test_gen_duckdb_never_queries_bigquery(tmp_path, monkeypatch, layer):
 def test_run_duckdb_never_queries_bigquery(tmp_path, monkeypatch):
     _creds(monkeypatch, True)
     _project(tmp_path, monkeypatch, DUCK.read_text())
-    r = runner.invoke(app, ["run"])
+    r = runner.invoke(app, ["run", "--introspect"])
     assert r.exit_code == 0, r.output
     assert NOTICE not in r.output
 
@@ -67,8 +75,10 @@ def test_run_duckdb_never_queries_bigquery(tmp_path, monkeypatch):
 def test_check_duckdb_never_queries_bigquery(tmp_path, monkeypatch):
     _creds(monkeypatch, True)
     _project(tmp_path, monkeypatch, DUCK.read_text())
-    assert runner.invoke(app, ["run"]).exit_code == 0  # files to check
-    r = runner.invoke(app, ["check"])
+    assert (
+        runner.invoke(app, ["run", "--introspect"]).exit_code == 0
+    )  # files to check
+    r = runner.invoke(app, ["check", "--introspect"])
     assert r.exit_code == 0, r.output
     assert NOTICE not in r.output
 
@@ -89,7 +99,7 @@ def test_run_builds_shared_bigquery_once_for_bq_only(tmp_path, monkeypatch):
     _Fake.built = 0
     _creds(monkeypatch, True, _Fake)
     _project(tmp_path, monkeypatch, CONTRACT_YAML)
-    r = runner.invoke(app, ["run"])
+    r = runner.invoke(app, ["run", "--introspect"])
     assert r.exit_code == 0, r.output
     assert _Fake.built == 1
 
@@ -105,9 +115,9 @@ def test_notice_only_for_bigquery_contracts(tmp_path, monkeypatch, cmd):
         (d / "contracts" / "c.yml").write_text(text)
         monkeypatch.chdir(d)
         args = (
-            ["gen", "contracts/c.yml", "--raw", "-o", "out"]
+            ["gen", "contracts/c.yml", "--raw", "--introspect", "-o", "out"]
             if cmd == "gen"
-            else [cmd]
+            else [cmd, "--introspect"]
         )
         return runner.invoke(app, args).output
 
@@ -129,7 +139,7 @@ def test_run_mixed_project_builds_bigquery_once_for_bq_contract_only(
     _Fake.built = 0
     _creds(monkeypatch, True, _Fake)
     _mixed_project(tmp_path, monkeypatch)
-    r = runner.invoke(app, ["run"])
+    r = runner.invoke(app, ["run", "--introspect"])
     assert r.exit_code == 0, r.output
     assert _Fake.built == 1
     assert NOTICE not in r.output
@@ -140,7 +150,7 @@ def test_run_mixed_project_without_credentials_notices_once(
 ):
     _creds(monkeypatch, False)
     _mixed_project(tmp_path, monkeypatch)
-    r = runner.invoke(app, ["run"])
+    r = runner.invoke(app, ["run", "--introspect"])
     assert r.exit_code == 0, r.output
     assert r.stdout.count(NOTICE) == 1
 

@@ -78,7 +78,7 @@ class ModelgenConfig:
     def from_file(cls, path: Path) -> ModelgenConfig:
         try:
             raw = yaml.safe_load(path.read_text()) or {}
-        except yaml.YAMLError as e:
+        except (yaml.YAMLError, RecursionError) as e:
             raise ConfigError(f"Failed to parse {path}: {e}") from e
         if not isinstance(raw, dict):
             raise ConfigError(f"{path} must be a YAML mapping.")

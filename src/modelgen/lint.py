@@ -27,8 +27,9 @@ from modelgen.contract import (
 )
 from modelgen.dialect import get_dialect
 
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_EVENT_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+# \Z, not $: $ also matches before a trailing line break.
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
+_EVENT_NAME = re.compile(r"^[a-z][a-z0-9_]*\Z")
 
 _INCREMENTAL_STRATEGIES = {"merge", "insert_overwrite", "microbatch"}
 _CLASSIFICATIONS = {"pii", "psi"}

@@ -27,7 +27,7 @@ BigQuery introspection needs Application Default Credentials:
 gcloud auth application-default login
 ```
 
-Everything except `new` also runs without them. `gen`, `run` and `check` query BigQuery only when the contract's selected server uses the BigQuery dialect, Application Default Credentials exist, and `--from-contract` is absent. Otherwise they use contract-only introspection: columns come from the contract's declarations and no BigQuery connection is made. A DuckDB or local contract always uses it, with no credentials notice. That's how CI runs it. `new` stays BigQuery-only.
+Everything except `new` runs without them. `gen`, `run` and `check` use contract-only introspection by default: columns come from the contract's declarations and no BigQuery connection is made, so the same contract gives the same files on every machine. Pass `--introspect` to query BigQuery instead. That happens only when the contract's selected server uses the BigQuery dialect and Application Default Credentials exist; a DuckDB or local contract never queries it. `new` stays BigQuery-only.
 
 ---
 
@@ -111,7 +111,8 @@ It prints one `<path> dry-run` line per file and exits `0`.
 | `--layer sources` | Sources yml for extract contracts. Same output as `modelgen sources`. |
 | `-o, --output DIR` | Output directory. Default `./models`. |
 | `--dry-run` | Preview without writing. |
-| `--from-contract` | Skip BigQuery introspection and use the contract's staging declarations. Ignored under `--layer`. |
+| `--introspect` | Query BigQuery for the source table's columns. Off by default. Ignored under `--layer`. |
+| `--from-contract` | The default: use the contract's staging declarations. Kept so existing scripts keep working. |
 | `-t, --table NAME` | Generate only the named schema object. Repeatable. Default: every object. |
 | `-s, --server ID` | Pick the server by its `server:` id. Not accepted with `--layer sources`. |
 | `-v, --verbose` | Debug logging. |
@@ -136,7 +137,7 @@ Reads `.modelgen.yml` and regenerates every contract it names: raw and staging l
 modelgen run
 ```
 
-Flags: `-c, --config FILE`, `-s, --server ID`, `--dry-run`, `--from-contract`, `-v, --verbose`. There is no `--strict`.
+Flags: `-c, --config FILE`, `-s, --server ID`, `--dry-run`, `--introspect`, `--from-contract`, `-v, --verbose`. There is no `--strict`.
 
 Exit codes for `run`:
 
@@ -211,7 +212,8 @@ Drifted repo: a `--- <path>` header and a unified diff for each drifted file, th
 |------|---------|
 | `-c, --config FILE` | Path to `.modelgen.yml`. Default: discovered upward from cwd. |
 | `--diff` | Print a unified diff for every drifted file. |
-| `--from-contract` | Skip BigQuery introspection for all contracts. |
+| `--introspect` | Query BigQuery for source columns. Off by default. |
+| `--from-contract` | The default. Kept so existing scripts keep working. |
 | `-s, --server ID` | Pick the server by its `server:` id. Applies to schema and event contracts. Extract contracts ignore it. |
 | `-v, --verbose` | Debug logging. |
 
@@ -397,7 +399,7 @@ DuckDB limits, enforced by lint or generation:
 - Known ID with an unsupported type: error that lists the supported types.
 - No `--server`: the first `type: bigquery` server wins, even when it comes after a DuckDB one. If there is none, the first server whose type a dialect supports is used, in contract order. If there is none at all, the error lists the supported types: `bigquery, duckdb, local`.
 
-Introspection follows the dialect. `gen`, `run` and `check` query BigQuery only when the contract's selected server uses the BigQuery dialect, Application Default Credentials exist, and `--from-contract` is absent. A DuckDB or local contract always uses contract-only introspection, even on a machine with GCP credentials, and prints no "No GCP credentials" notice. `new` stays BigQuery-only.
+Introspection is opt-in and follows the dialect. With `--introspect`, `gen`, `run` and `check` query BigQuery only when the contract's selected server uses the BigQuery dialect and Application Default Credentials exist. A DuckDB or local contract always uses contract-only introspection, even on a machine with GCP credentials, and prints no "No GCP credentials" notice. `new` stays BigQuery-only.
 
 ```bash
 modelgen gen contracts/events/build_summary.yml --staging --from-contract -o models/staging
@@ -644,7 +646,7 @@ Step 1: raw and staging.
 modelgen run
 ```
 
-`run` queries BigQuery only when the contract's selected server uses the BigQuery dialect and Application Default Credentials resolve. Otherwise it uses contract-only introspection and builds columns from the contract's staging declarations. Use the same introspection that produced the committed files. The raw layer differs between the two because BigQuery returns every source column and the contract declares only some of them. Regenerating with the other one commits a different raw file. Force contract-only introspection with `modelgen run --from-contract`.
+`run` uses contract-only introspection by default and builds columns from the contract's staging declarations. `modelgen run --introspect` queries BigQuery when the contract's selected server uses the BigQuery dialect and Application Default Credentials resolve. Use the same introspection that produced the committed files. The raw layer differs between the two because BigQuery returns every source column and the contract declares only some of them. Regenerating with the other one commits a different raw file.
 
 Step 2: schema and sources. With the `schema_*` and `sources_*` keys set, step 1 already wrote them and you can skip this step. Without the keys, regenerate them per contract:
 

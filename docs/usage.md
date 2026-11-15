@@ -130,7 +130,8 @@ modelgen gen CONTRACT [OPTIONS]
 | `--layer sources` | Sources yml for extract contracts. Same output as `modelgen sources` |
 | `-o`, `--output PATH` | Write files here (default: `./models`) |
 | `--dry-run` | Preview without writing |
-| `--from-contract` | Skip BigQuery introspection (see below). Ignored under `--layer` |
+| `--introspect` | Query BigQuery for source columns (see below). Off by default. Ignored under `--layer` |
+| `--from-contract` | The default. Kept so existing scripts keep working |
 | `-t`, `--table NAME` | Generate only the named schema object. Repeatable. Default: every object |
 | `-s`, `--server ID` | Pick the server by its `server:` id. Not accepted with `--layer sources` |
 | `-v`, `--verbose` | Debug logging |
@@ -213,7 +214,8 @@ modelgen run [OPTIONS]
 | `-s`, `--server ID` | Pick the server by its `server:` id |
 | `--dry-run` | Preview without writing |
 | `-v`, `--verbose` | Debug logging |
-| `--from-contract` | Skip BigQuery introspection for all contracts (see below) |
+| `--introspect` | Query BigQuery for source columns (see below). Off by default |
+| `--from-contract` | The default. Kept so existing scripts keep working |
 
 Staging generation is skipped for contracts with no columns declared;
 raw-only contracts are supported. Each source table is introspected
@@ -242,7 +244,8 @@ modelgen check [OPTIONS]
 | `--diff` | Print a unified diff for every drifted file |
 | `-s`, `--server ID` | Pick the server by its `server:` id. Extract contracts ignore it |
 | `-v`, `--verbose` | Debug logging |
-| `--from-contract` | Skip BigQuery introspection for all contracts |
+| `--introspect` | Query BigQuery for source columns. Off by default |
+| `--from-contract` | The default. Kept so existing scripts keep working |
 
 `check` takes no contract path and no `--layer`, `--table` or `--strict`.
 Besides the event contracts, it checks the schema and sources layers when
@@ -309,22 +312,29 @@ tests_output: dbt/tests
 
 ## Offline / contract-only introspection
 
-`gen`, `run`, and `check` introspect BigQuery at generation time to validate
-column references and populate the raw schema YAML, but only when the
-contract's selected server uses the BigQuery dialect, Application Default
-Credentials exist, and `--from-contract` is absent. Otherwise they use
-**contract-only introspection** and no BigQuery connection is made. A DuckDB
-or local contract always uses it, with no "No GCP credentials" notice.
+`gen`, `run`, and `check` use **contract-only introspection** by default:
+columns come from the contract and no BigQuery connection is made, so the
+same contract gives the same files on every machine. `--from-contract` is
+still accepted and means the same thing.
 
-Force it with `--from-contract`:
+Pass `--introspect` to query BigQuery at generation time, which validates
+column references and fills the raw schema YAML from the live table:
 
 ```bash
-modelgen gen contract.yml --raw --from-contract
-modelgen run --from-contract
-modelgen check --from-contract
+modelgen gen contract.yml --raw --introspect
+modelgen run --introspect
+modelgen check --introspect
 ```
 
-| Behaviour | With BQ | `--from-contract` |
+That query happens only when the contract's selected server uses the
+BigQuery dialect and Application Default Credentials exist. Without
+credentials it falls back to the contract and prints a notice. A DuckDB or
+local contract never queries BigQuery.
+
+The table to read is named by the contract, and the call uses whatever
+identity the machine holds. Use `--introspect` only on contracts you trust.
+
+| Behaviour | `--introspect` | Default |
 |---|---|---|
 | Column list in `raw_schema.yml` | Full source schema | Contract staging columns + key fields only |
 | Schema drift detection | Yes, fails if staging refs a missing column | Skipped |
