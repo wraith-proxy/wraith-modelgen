@@ -70,6 +70,8 @@ nav:
   - Reference:
     - Contracts, Layers & Dialects: reference.md
     - Architecture: architecture.md
+    - Python API: api.md
+    - Compatibility: compatibility.md
   - BigQuery Engineering:
     - Overview: bigquery/overview.md
     - Warehouse Architecture: bigquery/architecture.md

@@ -27,7 +27,15 @@ import re
 from pathlib import Path
 from typing import Any
 
-from modelgen.contract import ContractError, _load_doc, select_schema_objects
+from modelgen.contract import (
+    ContractError,
+    Issue,
+    _load_doc,
+    deprecation_notices,
+    read_contract,
+    safe_name,
+    select_schema_objects,
+)
 from modelgen.generator import provenance_header
 from modelgen.quality import ModelTests, map_object
 from modelgen.schema_mode import implied_tests
@@ -134,18 +142,27 @@ def render_sources(
     *,
     tables: list[str] | None = None,
     unmapped: list[str] | None = None,
+    notices: list[Issue] | None = None,
 ) -> dict[str, str]:
     """{relative path: content} for one contract. Nothing is written.
 
     Quality rules that cannot be mapped are appended to `unmapped` as
-    `<table>.<rule>`.
+    `<table>.<rule>`. Deprecation warnings are appended to `notices`.
     """
-    doc = _load_doc(contract.read_text(), str(contract))
+    doc = _load_doc(read_contract(contract), str(contract))
+    if notices is not None:
+        notices.extend(deprecation_notices(doc))
     schemas, object_count = select_schema_objects(doc, tables)
+    # Both names become quoted source() arguments in generated tests.
+    for obj in schemas:
+        safe_name("Schema object name", obj.get("name"))
 
     cname = str(doc.get("name") or "contract")
     meta = custom_properties(doc)
-    source_name = _scalar("dbtSourceName", meta.get("dbtSourceName")) or cname
+    source_name = safe_name(
+        "dbtSourceName (default: the contract name)",
+        _scalar("dbtSourceName", meta.get("dbtSourceName")) or cname,
+    )
     columns_test = (
         _scalar("dbtColumnSetTest", meta.get("dbtColumnSetTest"))
         or COLUMNS_TEST

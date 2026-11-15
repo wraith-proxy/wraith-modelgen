@@ -44,10 +44,11 @@ classified column on the row.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jsonschema
 import yaml
@@ -57,14 +58,136 @@ from modelgen.dialect import (
     get_dialect,
     supported_server_types,
 )
+from modelgen.errors import ModelgenError
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 ODCS_API_VERSION = "v3.0.2"
 SUPPORTED_ODCS_VERSIONS = ("v3.0.2", "v3.1.0", "v3.2.0")
 _SCHEMA_DIR = Path(__file__).parent / "schema"
 
 
-class ContractError(ValueError):
+@dataclass(frozen=True)
+class Issue:
+    """One problem in a contract. `pointer` is an RFC 6901 JSON pointer
+    ('' is the document root); `line` and `column` are 1-based."""
+
+    code: str
+    message: str
+    pointer: str = ""
+    line: int | None = None
+    column: int | None = None
+    severity: str = "error"
+
+
+class ContractError(ModelgenError, ValueError):
     """Raised when a contract is malformed or references invalid state."""
+
+    def __init__(self, message: str, issues: list[Issue] | None = None):
+        super().__init__(message)
+        self.issues = list(issues) if issues else [Issue("contract", message)]
+
+
+def _pointer(path: Iterable[object]) -> str:
+    return "".join(
+        "/" + str(p).replace("~", "~0").replace("/", "~1") for p in path
+    )
+
+
+def node_positions(text: str) -> dict[str, tuple[int, int]]:
+    """(line, column), both 1-based, of every value in the YAML `text`,
+    keyed by JSON pointer ('' for the root).
+
+    It re-parses `text`, so call it only once there is something to
+    locate and the document has passed the size, depth and alias guards.
+    """
+    positions: dict[str, tuple[int, int]] = {}
+    stack: list[tuple[str, yaml.Node]] = [
+        ("", yaml.compose(text, Loader=yaml.SafeLoader))
+    ]
+    while stack:
+        pointer, node = stack.pop()
+        if node is None:
+            continue
+        mark = node.start_mark
+        positions[pointer] = (mark.line + 1, mark.column + 1)
+        # Children go on the stack in reverse so the last duplicate key is
+        # popped and written last, matching safe_load's last-key-wins.
+        if isinstance(node, yaml.MappingNode):
+            stack.extend(
+                reversed(
+                    [
+                        (pointer + _pointer([key.value]), value)
+                        for key, value in node.value
+                        if isinstance(key, yaml.ScalarNode)
+                    ]
+                )
+            )
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(
+                reversed(
+                    [
+                        (pointer + _pointer([i]), child)
+                        for i, child in enumerate(node.value)
+                    ]
+                )
+            )
+    return positions
+
+
+def _located(
+    pointer: str, positions: dict[str, tuple[int, int]]
+) -> tuple[int, int] | None:
+    while pointer not in positions and pointer:
+        pointer = pointer.rsplit("/", 1)[0]
+    return positions.get(pointer)
+
+
+# ponytail: fixed ceilings, far above any real contract. Make them
+# configurable if a legitimate contract ever reaches one.
+MAX_CONTRACT_BYTES = 1_000_000
+_MAX_NODES = 1_000_000
+_MAX_DEPTH = 64
+
+_JINJA = re.compile(r"\{\{|\{%|\{#")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f\x85  ]")
+_SAFE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+
+def _limit_error(message: str) -> ContractError:
+    return ContractError(message, [Issue("limit", message)])
+
+
+def has_jinja(text: str) -> bool:
+    """True if dbt would render part of `text` as Jinja."""
+    return bool(_JINJA.search(text))
+
+
+def safe_name(what: str, value: object) -> str:
+    """`value` as text that is safe in a filename and inside a quoted
+    Jinja argument. Anything else is a ContractError."""
+    text = str(value)
+    if not _SAFE_NAME.fullmatch(text):
+        raise ContractError(
+            f"{what} may contain only letters, digits, '_', '.' and '-';"
+            f" got {text!r}."
+        )
+    return text
+
+
+def read_contract(path: Path) -> str:
+    """The contract's text, unless the file is too large to be one."""
+    if path.stat().st_size > MAX_CONTRACT_BYTES:
+        raise _limit_error(
+            f"Contract at {path} is larger than {MAX_CONTRACT_BYTES} bytes."
+        )
+    try:
+        return path.read_text()
+    except UnicodeDecodeError as e:
+        raise ContractError(
+            f"Contract at {path} is not valid UTF-8: {e}"
+        ) from e
 
 
 @lru_cache(maxsize=None)
@@ -93,10 +216,13 @@ def odcs_schema_errors(doc: dict[str, Any]) -> list[Any]:
         if version in _LEGACY_ODCS_VERSIONS:
             version = ODCS_API_VERSION
         else:
-            raise ContractError(
+            message = (
                 f"Contract is not valid ODCS: unsupported apiVersion"
                 f" {version!r}. Supported versions:"
                 f" {', '.join(SUPPORTED_ODCS_VERSIONS)}."
+            )
+            raise ContractError(
+                message, [Issue("odcs-version", message, "/apiVersion")]
             )
     return sorted(
         _odcs_validator(version).iter_errors(doc), key=lambda e: e.path
@@ -104,6 +230,26 @@ def odcs_schema_errors(doc: dict[str, Any]) -> list[Any]:
 
 
 _LEGACY_ODCS_VERSIONS = ("v3.0.1", "v3.0.0", "v2.2.2", "v2.2.1", "v2.2.0")
+
+
+def deprecation_notices(doc: dict[str, Any]) -> tuple[Issue, ...]:
+    """Warnings for a contract that is accepted but deprecated."""
+    version = doc.get("apiVersion")
+    if version not in _LEGACY_ODCS_VERSIONS:
+        return ()
+    message = (
+        f"apiVersion {version} is deprecated and will stop being accepted"
+        " in a later minor release."
+        f" Supported: {', '.join(SUPPORTED_ODCS_VERSIONS)}."
+    )
+    return (
+        Issue(
+            "odcs-version-deprecated",
+            message,
+            "/apiVersion",
+            severity="warning",
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -131,6 +277,7 @@ class StagingColumn:
     tests: list[ColumnTest] = field(default_factory=list)
     classification: str = ""  # "" | "pii" | "psi": drives encryption
     exemptions: list[Exemption] = field(default_factory=list)
+    pointer: str = ""  # JSON pointer of the ODCS property it came from
 
     def __post_init__(self):
         if not self.source:
@@ -147,7 +294,7 @@ class StagingColumn:
         return self.source != self.name
 
     @classmethod
-    def from_property(cls, prop: dict) -> StagingColumn:
+    def from_property(cls, prop: dict, pointer: str = "") -> StagingColumn:
         """Build from an ODCS schema property.
 
         physicalName is the source column; name is the consumer-facing
@@ -180,6 +327,7 @@ class StagingColumn:
             tests=tests,
             classification=(prop.get("classification") or "").strip().lower(),
             exemptions=_exemptions(prop),
+            pointer=pointer,
         )
 
 
@@ -452,6 +600,8 @@ class EventContract:
     exemptions: list[Exemption] = field(default_factory=list)
     contract_name: str = ""  # ODCS top-level name (falls back to name)
     contract_version: str = ""  # ODCS top-level version
+    pointer: str = ""  # JSON pointer of its ODCS schema object
+    notices: tuple[Issue, ...] = ()
 
     @property
     def classified_columns(self) -> list[StagingColumn]:
@@ -479,7 +629,7 @@ class EventContract:
 
     @classmethod
     def from_file(cls, path: Path) -> EventContract:
-        return cls.from_text(path.read_text(), source=str(path))
+        return cls.from_text(read_contract(path), source=str(path))
 
     @classmethod
     def from_file_all(
@@ -490,7 +640,7 @@ class EventContract:
         tables: list[str] | None = None,
     ) -> list[EventContract]:
         return cls.from_text_all(
-            path.read_text(), source=str(path), server=server, tables=tables
+            read_contract(path), source=str(path), server=server, tables=tables
         )
 
     @classmethod
@@ -533,8 +683,11 @@ class EventContract:
 
         server = _select_server(doc.get("servers") or [], server_name)
         project, dataset = get_dialect(server["type"]).source_location(server)
+        index = {id(o): i for i, o in enumerate(doc["schema"])}
         return [
-            cls._from_object(doc, obj, server, project, dataset)
+            cls._from_object(
+                doc, obj, server, project, dataset, f"/schema/{index[id(obj)]}"
+            )
             for obj in schemas
         ]
 
@@ -546,6 +699,7 @@ class EventContract:
         server: dict[str, Any],
         project: str,
         dataset: str,
+        pointer: str = "",
     ) -> EventContract:
         props = obj.get("properties") or []
         table = obj.get("physicalName") or obj.get("name")
@@ -578,12 +732,17 @@ class EventContract:
             raw=RawConfig.from_raw(cfg.get("modelgenRaw")),
             staging=StagingConfig.from_raw(
                 cfg.get("modelgenStaging"),
-                [StagingColumn.from_property(p) for p in props],
+                [
+                    StagingColumn.from_property(p, f"{pointer}/properties/{j}")
+                    for j, p in enumerate(props)
+                ],
             ),
             subject_field=cfg.get("modelgenSubjectField") or "",
             exemptions=_exemptions(obj),
             contract_name=str(doc.get("name") or obj["name"]),
             contract_version=str(doc.get("version") or ""),
+            pointer=pointer,
+            notices=deprecation_notices(doc),
         )
 
 
@@ -626,28 +785,108 @@ def select_schema_objects(
 
 def _load_doc(text: str, source: str) -> dict[str, Any]:
     """Parse YAML and check it is a valid ODCS DataContract."""
+    if len(text) > MAX_CONTRACT_BYTES:
+        raise _limit_error(
+            f"Contract at {source} is larger than {MAX_CONTRACT_BYTES} bytes."
+        )
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as e:
-        raise ContractError(f"Failed to parse YAML at {source}: {e}") from e
+        mark = getattr(e, "problem_mark", None)
+        if mark is None:
+            message = f"Failed to parse YAML at {source}: {e}"
+            issue = Issue("yaml", message)
+        else:
+            line, column = mark.line + 1, mark.column + 1
+            message = (
+                f"Failed to parse YAML at {source}"
+                f" (line {line}, column {column}): {e}"
+            )
+            issue = Issue("yaml", message, line=line, column=column)
+        raise ContractError(message, [issue]) from e
+    except RecursionError as e:
+        raise _limit_error(
+            f"Contract at {source} is nested too deeply to parse."
+        ) from e
 
     if not isinstance(doc, dict):
         raise ContractError(
             f"Contract root must be a mapping, got {type(doc).__name__}"
         )
 
+    _refuse_hostile_shape(doc, source)
     errors = odcs_schema_errors(doc)
     if errors:
-        first = errors[0]
-        loc = "/".join(str(p) for p in first.path) or "<root>"
+        positions = node_positions(text)
+        issues = []
+        for e in errors:
+            pointer = _pointer(e.absolute_path)
+            line, column = _located(pointer, positions) or (None, None)
+            issues.append(
+                Issue(
+                    "schema." + str(e.validator),
+                    e.message,
+                    pointer,
+                    line,
+                    column,
+                )
+            )
         raise ContractError(
-            f"Contract at {source} is not valid ODCS"
-            f" ({len(errors)} error(s)). First at {loc}:"
-            f" {first.message}"
+            "\n".join(
+                [
+                    f"Contract at {source} is not valid ODCS"
+                    f" ({len(issues)} error(s)):"
+                ]
+                + [
+                    f"  - {i.pointer or '<root>'} (line {i.line}): {i.message}"
+                    for i in issues
+                ]
+            ),
+            issues,
         )
 
     if doc.get("kind") != "DataContract":
         raise ContractError(
             f"kind must be 'DataContract', got {doc.get('kind')!r}."
         )
+    # Both land on a comment line at the top of every generated file.
+    for key in ("name", "version"):
+        if _CONTROL.search(str(doc.get(key) or "")):
+            raise ContractError(
+                f"Contract {key} must be one line with no control characters."
+            )
     return doc
+
+
+def _refuse_hostile_shape(doc: dict[str, Any], source: str) -> None:
+    """Bound the walk every later step makes, and keep Jinja out.
+
+    YAML aliases let a small file expand to billions of nodes once
+    something walks it, and dbt renders Jinja wherever it finds it in a
+    generated file, comments included.
+    """
+    seen = 0
+    stack: list[tuple[Any, int]] = [(doc, 0)]
+    while stack:
+        node, depth = stack.pop()
+        seen += 1
+        if seen > _MAX_NODES:
+            raise _limit_error(
+                f"Contract at {source} expands to more than {_MAX_NODES}"
+                " nodes. YAML aliases are the usual cause."
+            )
+        if depth > _MAX_DEPTH:
+            raise _limit_error(
+                f"Contract at {source} is nested more than {_MAX_DEPTH}"
+                " levels deep."
+            )
+        if isinstance(node, dict):
+            stack.extend((x, depth + 1) for kv in node.items() for x in kv)
+        elif isinstance(node, list):
+            stack.extend((x, depth + 1) for x in node)
+        elif isinstance(node, str) and has_jinja(node):
+            raise ContractError(
+                f"Contract at {source} contains Jinja delimiters"
+                f" ({{{{, {{% or {{#) in {node[:40]!r}. dbt would render"
+                " them in generated files."
+            )

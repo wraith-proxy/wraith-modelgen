@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from modelgen.dialect import get_dialect
+from modelgen.errors import ModelgenError
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class IntrospectedColumn:
         return base
 
 
-class IntrospectionError(RuntimeError):
+class IntrospectionError(ModelgenError, RuntimeError):
     """Raised when the warehouse cannot be queried or target does not exist."""
 
 
@@ -168,26 +169,6 @@ class ContractIntrospector:
                     name=name, field_type=default_type
                 )
         return list(seen.values())
-
-
-class FakeIntrospector:
-    """For tests and offline development. Pre-populated with schemas."""
-
-    def __init__(
-        self, schemas: dict[tuple[str, str, str], list[IntrospectedColumn]]
-    ):
-        self._schemas = schemas
-
-    def get_columns(
-        self, project: str, dataset: str, table: str
-    ) -> list[IntrospectedColumn]:
-        key = (project, dataset, table)
-        if key not in self._schemas:
-            raise IntrospectionError(
-                f"No fake schema registered for {project}.{dataset}.{table}. "
-                f"Registered: {list(self._schemas.keys())}"
-            )
-        return self._schemas[key]
 
 
 class IntrospectorChooser:

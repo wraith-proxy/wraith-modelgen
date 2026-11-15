@@ -13,7 +13,8 @@ import pytest
 from typer.testing import CliRunner
 
 from modelgen.cli import app
-from modelgen.introspect import FakeIntrospector, IntrospectedColumn
+from modelgen.introspect import IntrospectedColumn
+from tests.fakes import FakeIntrospector
 
 runner = CliRunner()
 
@@ -203,9 +204,35 @@ class TestGenCommand:
 
     def test_schema_evolution_panel_shown(self, contract_file, tmp_path):
         result = runner.invoke(
-            app, ["gen", str(contract_file), "--staging", "-o", str(tmp_path)]
+            app,
+            [
+                "gen",
+                str(contract_file),
+                "--staging",
+                "--introspect",
+                "-o",
+                str(tmp_path),
+            ],
         )
         assert "EXTRA_COL" in strip_ansi(result.output)
+
+    def test_schema_evolution_notice_stays_off_stdout(
+        self, contract_file, tmp_path
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "gen",
+                str(contract_file),
+                "--staging",
+                "--introspect",
+                "-o",
+                str(tmp_path),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "not yet in staging contract" in strip_ansi(result.stderr)
+        assert "not yet in staging contract" not in strip_ansi(result.stdout)
 
     def test_neither_flag_exits_2(self, contract_file, tmp_path):
         result = runner.invoke(
@@ -286,7 +313,14 @@ class TestGenCommand:
         )
         result = runner.invoke(
             app,
-            ["gen", str(contract_file), "--raw", "-o", str(tmp_path)],
+            [
+                "gen",
+                str(contract_file),
+                "--raw",
+                "--introspect",
+                "-o",
+                str(tmp_path),
+            ],
         )
         assert result.exit_code == 0, result.output
         output = strip_ansi(result.output)
@@ -325,7 +359,7 @@ class TestValidateCommand:
         result = runner.invoke(app, ["validate", str(p)])
         assert result.exit_code == 1
 
-    def test_semantic_error_exits_1(self, tmp_path):
+    def test_semantic_error_exits_3(self, tmp_path):
         p = tmp_path / "bad_strategy.yml"
         p.write_text(
             CONTRACT_YAML.replace(
@@ -334,7 +368,7 @@ class TestValidateCommand:
             )
         )
         result = runner.invoke(app, ["validate", str(p)])
-        assert result.exit_code == 1
+        assert result.exit_code == 3
         output = strip_ansi(result.output)
         assert "invalid-raw-strategy" in output
         assert "FAIL" in output
@@ -351,7 +385,7 @@ class TestValidateCommand:
         p = tmp_path / "warns.yml"
         p.write_text(CONTRACT_YAML)
         result = runner.invoke(app, ["validate", str(p), "--strict"])
-        assert result.exit_code == 1
+        assert result.exit_code == 3
         assert "FAIL" in strip_ansi(result.output)
 
     def test_all_errors_reported_in_one_pass(self, tmp_path):
@@ -381,7 +415,7 @@ class TestGenLintGate:
         result = runner.invoke(
             app, ["gen", str(contract_file), "--raw", "-o", str(tmp_path)]
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 3
         assert "failed lint" in strip_ansi(result.output)
         assert not (tmp_path / "raw__user_signed_up.sql").exists()
 
@@ -504,7 +538,7 @@ class TestRunCommand:
         assert "raw__user_signed_up.sql" in strip_ansi(result.output)
         assert "raw__page_viewed.sql" in strip_ansi(result.output)
 
-    def test_run_lint_error_exits_1(self, tmp_path):
+    def test_run_lint_error_exits_3(self, tmp_path):
         (tmp_path / "contracts").mkdir()
         (tmp_path / "contracts" / "bad.yml").write_text(
             CONTRACT_YAML.replace(
@@ -515,7 +549,7 @@ class TestRunCommand:
         cfg = tmp_path / ".modelgen.yml"
         cfg.write_text("contracts: contracts/*.yml\n")
         result = runner.invoke(app, ["run", "--config", str(cfg)])
-        assert result.exit_code == 1
+        assert result.exit_code == 3
         assert "lint" in strip_ansi(result.output)
 
     def test_run_invalid_contract_exits_1(self, tmp_path):
@@ -569,16 +603,16 @@ class TestCheckCommand:
     def test_check_writes_nothing(self, repo):
         cfg = str(repo / ".modelgen.yml")
         result = runner.invoke(app, ["check", "--config", cfg])
-        assert result.exit_code == 1
+        assert result.exit_code == 4
         assert not (repo / "models").exists()
 
-    def test_missing_files_exit_1(self, repo):
+    def test_missing_files_exit_4(self, repo):
         cfg = str(repo / ".modelgen.yml")
         result = runner.invoke(app, ["check", "--config", cfg])
-        assert result.exit_code == 1
+        assert result.exit_code == 4
         assert "missing" in strip_ansi(result.output)
 
-    def test_drifted_file_exits_1(self, repo):
+    def test_drifted_file_exits_4(self, repo):
         result = self._run_then_check(repo)
         assert result.exit_code == 0
         sql = repo / "models" / "raw" / "raw__user_signed_up.sql"
@@ -586,7 +620,7 @@ class TestCheckCommand:
         check = runner.invoke(
             app, ["check", "--config", str(repo / ".modelgen.yml")]
         )
-        assert check.exit_code == 1
+        assert check.exit_code == 4
         assert "drift" in strip_ansi(check.output)
 
     def test_diff_flag_shows_unified_diff(self, repo):
@@ -597,7 +631,7 @@ class TestCheckCommand:
             app,
             ["check", "--config", str(repo / ".modelgen.yml"), "--diff"],
         )
-        assert check.exit_code == 1
+        assert check.exit_code == 4
         output = strip_ansi(check.output)
         assert "-- hand edit" in output
         assert "expected" in output
@@ -613,7 +647,7 @@ class TestCheckCommand:
         cfg = tmp_path / ".modelgen.yml"
         cfg.write_text("contracts: contracts/*.yml\n")
         result = runner.invoke(app, ["check", "--config", str(cfg)])
-        assert result.exit_code == 1
+        assert result.exit_code == 3
         assert "lint" in strip_ansi(result.output)
 
     def test_check_no_contracts_exits_zero(self, tmp_path):
@@ -734,7 +768,7 @@ class TestExemptions:
             EXEMPT_YAML.replace("key column, the name says it all", ""),
         )
         result = runner.invoke(app, ["validate", str(p)])
-        assert result.exit_code == 1
+        assert result.exit_code == 3
         assert "invalid-exemption-reason" in strip_ansi(result.output)
 
 

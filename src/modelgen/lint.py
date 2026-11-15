@@ -27,8 +27,9 @@ from modelgen.contract import (
 )
 from modelgen.dialect import get_dialect
 
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_EVENT_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+# \Z, not $: $ also matches before a trailing line break.
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
+_EVENT_NAME = re.compile(r"^[a-z][a-z0-9_]*\Z")
 
 _INCREMENTAL_STRATEGIES = {"merge", "insert_overwrite", "microbatch"}
 _CLASSIFICATIONS = {"pii", "psi"}
@@ -54,6 +55,7 @@ class Finding:
     message: str
     column: str = ""  # staging column name; "" means contract-scoped
     exempt_reason: str = ""
+    pointer: str = ""  # JSON pointer into the contract
 
     @property
     def is_error(self) -> bool:
@@ -132,7 +134,25 @@ def lint_contract(contract: EventContract) -> list[Finding]:
     # After the sweep, so an exemption can never exempt itself.
     findings.extend(_lint_exemptions(contract))
 
-    return findings
+    return _with_pointers(contract, findings)
+
+
+def _with_pointers(
+    contract: EventContract, findings: list[Finding]
+) -> list[Finding]:
+    """Point column findings at the column's ODCS property, and the rest
+    (or a column with no single source property) at the schema object."""
+    sources: dict[str, list[str]] = {}
+    for col in contract.staging.columns:
+        sources.setdefault(col.name, []).append(col.pointer)
+
+    def pointer(column: str) -> str:
+        found = sources.get(column, [])
+        if len(found) == 1 and found[0]:
+            return found[0]
+        return contract.pointer
+
+    return [replace(f, pointer=pointer(f.column)) for f in findings]
 
 
 def _appender(findings: list[Finding], severity: Severity):

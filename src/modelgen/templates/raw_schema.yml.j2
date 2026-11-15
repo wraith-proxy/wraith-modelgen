@@ -28,7 +28,7 @@ sources:
           - name: {{ col.name }}
             data_type: {{ col.dbt_data_type }}
 {% if col.description %}
-            description: "{{ col.description | replace('"', '\\"') }}"
+            description: {{ col.description | yaml_str }}
 {% endif %}
 {% endfor %}
 
@@ -42,6 +42,6 @@ models:
       - name: {{ col.name }}
         data_type: {{ col.dbt_data_type }}
 {% if col.description %}
-        description: "{{ col.description | replace('"', '\\"') }}"
+        description: {{ col.description | yaml_str }}
 {% endif %}
 {% endfor %}

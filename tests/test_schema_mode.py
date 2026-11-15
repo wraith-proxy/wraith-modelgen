@@ -230,7 +230,7 @@ def _project(tmp_path: Path) -> Path:
 def test_check_covers_schema_layer(tmp_path):
     proj = _project(tmp_path)
     missing = _cli("check", cwd=proj, check=False)
-    assert missing.returncode == 1
+    assert missing.returncode == 4
     _cli(
         "schema", str(proj / "contracts" / "bus-marts.odcs.yaml"),
         "-o", str(proj / "models" / "marts"), cwd=proj,
@@ -240,4 +240,4 @@ def test_check_covers_schema_layer(tmp_path):
     target = next((proj / "models" / "marts").glob("*.yml"))
     target.write_text(target.read_text() + "# drift\n")
     drift = _cli("check", cwd=proj, check=False)
-    assert drift.returncode == 1
+    assert drift.returncode == 4

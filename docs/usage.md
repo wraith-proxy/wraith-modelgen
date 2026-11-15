@@ -39,11 +39,78 @@ so `run` then `check` is a clean round trip. The separate `schema` and
 
 ## Exit codes
 
-| Code | Meaning |
+| Code | Name | Meaning |
+|---|---|---|
+| `0` | OK | Success. For `check`, everything in sync. Also when no contracts are found. |
+| `1` | INVALID | A contract or `.modelgen.yml` is invalid: YAML or ODCS schema errors, an unsupported `apiVersion`, rejected input, a contract that does not match its source, or a config pattern that matches nothing. |
+| `2` | USAGE | Bad or conflicting flags, a path that does not exist, or an action refused until you pass a flag such as `--force`. |
+| `3` | LINT | Lint errors, or `--strict` with unmapped quality rules. |
+| `4` | DRIFT | `check` found generated files missing or out of sync. |
+| `5` | ENVIRONMENT | Credentials or warehouse failure: no GCP credentials where they are required, or introspection failed. |
+| `6` | INTERNAL | An unexpected error: a modelgen bug. |
+
+When one run hits more than one of these, it exits with the first that
+applies in this order: INTERNAL, ENVIRONMENT, INVALID, LINT, DRIFT.
+
+These codes are stable: a release will not change their meaning.
+
+---
+
+## Machine-readable output
+
+stdout carries results only: tables, summaries, created paths, diffs and,
+with `--format json`, the report. stderr carries diagnostics: contract and
+config errors, lint findings, notices and warnings. This holds in both
+modes, so `modelgen validate contract.yml 2>/dev/null` prints only the
+summary of a contract that passed. This includes `run` and `check`:
+their tables, summaries and diffs go to stdout, their errors and notices
+(`Config error`, `Drift detected`, the no-credentials notice) to stderr.
+
+`--format json` (default `text`, case-insensitive) makes a command print
+exactly one JSON document on stdout, with no panels or tables. Six
+commands take it: `validate`, `gen`, `schema`, `sources`, `run` and `check`.
+`check --diff` is ignored with `--format json`: the document already
+carries each file's `sha256` and `on_disk_sha256`.
+
+```bash
+modelgen validate contract.yml --format json
+```
+
+The document is described by the JSON Schema
+[`modelgen-report-v1.json`](https://git.thomaspeoples.com/thomaspeoples/wraith-modelgen/src/branch/main/src/modelgen/schema/modelgen-report-v1.json)
+(draft 2020-12), which also ships in the package at
+`modelgen/schema/modelgen-report-v1.json`.
+
+| Field | Meaning |
 |---|---|
-| `0` | Success, or for `check`, everything in sync |
-| `1` | A contract, config or generation error, drift, or a `--strict` failure |
-| `2` | Usage error: bad or conflicting flags, or a contract path that does not exist |
+| `schema_version` | `1`. Bumped only when the document changes incompatibly. |
+| `tool`, `tool_version` | `"modelgen"` and the installed version. |
+| `command` | The command that ran, e.g. `"validate"`. |
+| `exit_code` | The process exit status (see [Exit codes](#exit-codes)). |
+| `ok` | `true` when `exit_code` is `0`. |
+| `inputs` | One entry per contract read: `path` as given and the `sha256` of the file's bytes. |
+| `issues` | Every problem found, see below. For a contract that passes, the lint warnings and exempted findings. |
+| `files` | Generated files: `path`, `layer`, `sha256` of the generated content, `status` (`written`, `dry_run`, `in_sync`, `drift` or `missing`) and `on_disk_sha256` (`null` when not compared). Empty for `validate`. |
+
+Each issue has:
+
+| Field | Meaning |
+|---|---|
+| `source` | The contract path. For a malformed `.modelgen.yml`, the config path. |
+| `object` | The schema object (event) name when known, else `null`. For `quality-rule-unmapped` it is the rule, as `<model>.<rule>`. |
+| `code` | A lint rule code (see [linting](linting.md)), or one of: `schema.<keyword>`, `yaml`, `limit`, `odcs-version` or `contract` (a contract or `.modelgen.yml` that could not be read); `odcs-version-deprecated` (a warning, see [compatibility](compatibility.md)); `quality-rule-unmapped` (a quality rule with no dbt test; an error under `--strict`); `generation` (a model could not be generated); `introspection` (a source table could not be introspected); `internal` (an unexpected error, exit `6`). |
+| `severity` | `error` or `warning`. |
+| `message` | The human-readable message. |
+| `pointer` | JSON pointer into the contract (`""` is the document root), or `null`. |
+| `line`, `column` | 1-based position in the file, or `null`. |
+| `exempt_reason` | The `modelgenExempt` reason for an exempted finding, else `null`. |
+
+A contract that fails the ODCS schema exits `1` with one issue per schema
+error; lint errors exit `3` with one issue per finding.
+
+Usage errors (exit `2`) are the exception: bad or unknown flags are
+rejected while the command line is parsed, before any command runs, so
+they print text on stderr and no document.
 
 ---
 
@@ -97,14 +164,16 @@ Offline validation: YAML structure first, then a full semantic lint.
 No BigQuery credentials or network access needed.
 
 ```bash
-modelgen validate contract.yml [--strict] [--server ID]
+modelgen validate contract.yml [--strict] [--server ID] [--format json]
 ```
 
 All findings are reported in one pass: typo'd incremental strategies,
 casts to types the dialect does not know, duplicate columns, unsafe
 identifiers, partition or cluster references to undeclared staging
 columns, and keys the staging model never selects. See the
-[lint rule catalogue](linting.md).
+[lint rule catalogue](linting.md). A contract that fails the ODCS schema
+gets every schema error reported, each with its JSON pointer and the line
+it sits on in the file.
 
 `--strict` turns warnings (missing descriptions, untested keys) into
 failures. For CI gates with standards. A rule that is wrong for one
@@ -130,7 +199,8 @@ modelgen gen CONTRACT [OPTIONS]
 | `--layer sources` | Sources yml for extract contracts. Same output as `modelgen sources` |
 | `-o`, `--output PATH` | Write files here (default: `./models`) |
 | `--dry-run` | Preview without writing |
-| `--from-contract` | Skip BigQuery introspection (see below). Ignored under `--layer` |
+| `--introspect` | Query BigQuery for source columns (see below). Off by default. Ignored under `--layer` |
+| `--from-contract` | The default. Kept so existing scripts keep working |
 | `-t`, `--table NAME` | Generate only the named schema object. Repeatable. Default: every object |
 | `-s`, `--server ID` | Pick the server by its `server:` id. Not accepted with `--layer sources` |
 | `-v`, `--verbose` | Debug logging |
@@ -142,7 +212,8 @@ modelgen gen CONTRACT [OPTIONS]
 Exit `2`: neither or both of `--raw`/`--staging` given, `--layer` combined
 with them, an unknown `--layer` value, or `--server` with `--layer sources`.
 Exit `1`: the contract is invalid (including an unknown `--table` or
-`--server`), has lint errors, or generation or introspection failed.
+`--server`) or generation failed. Exit `3`: the contract has lint errors.
+Exit `5`: introspection failed.
 
 ```bash
 modelgen gen contract.yml --raw     -o ./models/raw
@@ -173,12 +244,12 @@ modelgen schema contracts/bus-marts.odcs.yaml -o models/marts --strict
 | `--dry-run` | Preview without writing |
 | `-t`, `--table NAME` | Repeatable. Unknown names exit `1` |
 | `-s`, `--server ID` | Pick the server by its `server:` id |
-| `--strict` | Exit `1` when any quality rule cannot be mapped |
+| `--strict` | Exit `3` when any quality rule cannot be mapped |
 | `-v`, `--verbose` | Debug logging |
 
 Unmapped rules are reported on stderr as `modelgen: N quality rule(s) not
 mapped: <model>.<rule>`. With `--strict`, files are still written before
-the exit `1`; with `--dry-run`, nothing is written but the exit `1` still
+the exit `3`; with `--dry-run`, nothing is written but the exit `3` still
 applies.
 
 ---
@@ -213,7 +284,8 @@ modelgen run [OPTIONS]
 | `-s`, `--server ID` | Pick the server by its `server:` id |
 | `--dry-run` | Preview without writing |
 | `-v`, `--verbose` | Debug logging |
-| `--from-contract` | Skip BigQuery introspection for all contracts (see below) |
+| `--introspect` | Query BigQuery for source columns (see below). Off by default |
+| `--from-contract` | The default. Kept so existing scripts keep working |
 
 Staging generation is skipped for contracts with no columns declared;
 raw-only contracts are supported. Each source table is introspected
@@ -242,7 +314,8 @@ modelgen check [OPTIONS]
 | `--diff` | Print a unified diff for every drifted file |
 | `-s`, `--server ID` | Pick the server by its `server:` id. Extract contracts ignore it |
 | `-v`, `--verbose` | Debug logging |
-| `--from-contract` | Skip BigQuery introspection for all contracts |
+| `--introspect` | Query BigQuery for source columns. Off by default |
+| `--from-contract` | The default. Kept so existing scripts keep working |
 
 `check` takes no contract path and no `--layer`, `--table` or `--strict`.
 Besides the event contracts, it checks the schema and sources layers when
@@ -263,10 +336,11 @@ got committed all fail loudly:
 ```
 
 Exit `0`: in sync, or no contracts matched and no `schema_contracts` or
-`sources_contracts` pattern is set. Exit `1`: drift or missing files, a
-contract that fails to parse, lint or introspect, a malformed
-`.modelgen.yml`, or a `schema_contracts`/`sources_contracts` pattern that
-matches no files.
+`sources_contracts` pattern is set. Exit `4`: drift or missing files. A
+contract that fails to parse (`1`), lint (`3`) or introspect (`5`), a
+malformed `.modelgen.yml` (`1`), or a `schema_contracts`/`sources_contracts`
+pattern that matches no files (`1`) exits with its own code; with several
+failures the precedence above applies.
 
 ---
 
@@ -309,22 +383,29 @@ tests_output: dbt/tests
 
 ## Offline / contract-only introspection
 
-`gen`, `run`, and `check` introspect BigQuery at generation time to validate
-column references and populate the raw schema YAML, but only when the
-contract's selected server uses the BigQuery dialect, Application Default
-Credentials exist, and `--from-contract` is absent. Otherwise they use
-**contract-only introspection** and no BigQuery connection is made. A DuckDB
-or local contract always uses it, with no "No GCP credentials" notice.
+`gen`, `run`, and `check` use **contract-only introspection** by default:
+columns come from the contract and no BigQuery connection is made, so the
+same contract gives the same files on every machine. `--from-contract` is
+still accepted and means the same thing.
 
-Force it with `--from-contract`:
+Pass `--introspect` to query BigQuery at generation time, which validates
+column references and fills the raw schema YAML from the live table:
 
 ```bash
-modelgen gen contract.yml --raw --from-contract
-modelgen run --from-contract
-modelgen check --from-contract
+modelgen gen contract.yml --raw --introspect
+modelgen run --introspect
+modelgen check --introspect
 ```
 
-| Behaviour | With BQ | `--from-contract` |
+That query happens only when the contract's selected server uses the
+BigQuery dialect and Application Default Credentials exist. Without
+credentials it falls back to the contract and prints a notice. A DuckDB or
+local contract never queries BigQuery.
+
+The table to read is named by the contract, and the call uses whatever
+identity the machine holds. Use `--introspect` only on contracts you trust.
+
+| Behaviour | `--introspect` | Default |
 |---|---|---|
 | Column list in `raw_schema.yml` | Full source schema | Contract staging columns + key fields only |
 | Schema drift detection | Yes, fails if staging refs a missing column | Skipped |

@@ -9,3 +9,6 @@ Official Open Data Contract Standard schemas, selected by a contract's
 | odcs-json-schema-v3.2.0.json | https://raw.githubusercontent.com/bitol-io/open-data-contract-standard/v3.2.0/schema/odcs-json-schema-v3.2.0.json | edb41f33ec46e84780e99872ab2bd67f074959d2bf3e9c9fc54e61f8982b0d93 |
 
 `odcs-json-schema-v3.0.2.json` is the original bundled schema, unchanged.
+
+`modelgen-report-v1.json` is not an ODCS schema. It is modelgen's own JSON
+Schema for the `--format json` report and is not selected by `apiVersion`.

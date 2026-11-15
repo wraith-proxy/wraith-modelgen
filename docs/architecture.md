@@ -111,4 +111,4 @@ flowchart TD
 
 **Strict failure on missing columns.** If the contract references a column the source no longer has, generation fails with the column name. A failed build is better than a broken pipeline that nobody noticed.
 
-**BigQuery introspection only, by design.** The introspection module is BQ-native. Without credentials, or with `--from-contract`, columns come from the contract (`ContractIntrospector`) for any dialect. Warehouse SQL lives behind the dialect layer (`dialect.py`), which ships BigQuery and DuckDB. A new warehouse needs a dialect, and a live-schema `Introspector` if you want it to read columns.
+**BigQuery introspection only, by design.** The introspection module is BQ-native. Unless `--introspect` is passed and credentials exist, columns come from the contract (`ContractIntrospector`) for any dialect. Warehouse SQL lives behind the dialect layer (`dialect.py`), which ships BigQuery and DuckDB. A new warehouse needs a dialect, and a live-schema `Introspector` if you want it to read columns.

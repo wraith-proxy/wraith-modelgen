@@ -16,14 +16,21 @@ from dataclasses import field as dc_field
 from enum import Enum
 from pathlib import Path
 
+import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from modelgen import __version__
-from modelgen.contract import ColumnTest, EventContract, StagingColumn
+from modelgen.contract import (
+    ColumnTest,
+    EventContract,
+    StagingColumn,
+    has_jinja,
+)
 from modelgen.dialect import Dialect, get_dialect
 from modelgen.dialect import render_cluster_by as _render_cluster_by
 from modelgen.dialect import staging_name_for as _staging_name_for
 from modelgen.dialect import staging_unique_key_dbt as _staging_unique_key_dbt
+from modelgen.errors import ModelgenError
 from modelgen.introspect import IntrospectedColumn, Introspector
 
 logger = logging.getLogger(__name__)
@@ -72,7 +79,7 @@ class Layer(str, Enum):
     STAGING = "staging"
 
 
-class GenerationError(RuntimeError):
+class GenerationError(ModelgenError, RuntimeError):
     """Raised when generation fails for reasons other than contract parsing."""
 
 
@@ -87,7 +94,43 @@ def _make_env() -> Environment:
     # Jinja's tojson is HTML-safe and escapes quotes to \uXXXX, which is
     # unreadable in a generated file a human reviews in a diff.
     env.filters["json"] = json.dumps
+    env.filters["yaml_str"] = _yaml_str
     return env
+
+
+def _yaml_str(value: object) -> str:
+    """`value` as a double-quoted YAML scalar.
+
+    Descriptions come from contracts and from warehouse metadata, so the
+    quoting is PyYAML's and Jinja is refused: dbt renders descriptions.
+    """
+    text = str(value)
+    if has_jinja(text):
+        raise GenerationError(
+            "A column description contains Jinja delimiters ({{, {% or"
+            f" {{#), which dbt would render: {text[:40]!r}. Remove them"
+            " at the source."
+        )
+    return yaml.safe_dump(
+        text, default_style='"', allow_unicode=True, width=float("inf")
+    ).rstrip("\n")
+
+
+def write_generated(dest: Path, content: str, *roots: Path | None) -> None:
+    """Write one generated file inside one of `roots`.
+
+    A destination that is a symlink, or that resolves outside every root,
+    is refused: either would let input redirect the write.
+    """
+    real = dest.resolve()
+    inside = any(r and real.is_relative_to(r.resolve()) for r in roots)
+    if dest.is_symlink() or not inside:
+        raise GenerationError(
+            f"Refusing to write {dest}: it is a symlink or resolves"
+            " outside the output directory."
+        )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content)
 
 
 def _join_cols(exprs: list[str], indent: int) -> str:
@@ -483,8 +526,7 @@ def generate(
     for filename, content in artefacts.items():
         dest = output_dir / filename
         if not dry_run:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content)
+            write_generated(dest, content, output_dir)
         written.append(dest)
 
     return GenerationResult(

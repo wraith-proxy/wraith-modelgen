@@ -293,7 +293,7 @@ def test_unmapped_rules_reported_and_strict_fails(tmp_path):
         "schema", str(path), "-o", str(out2), "--strict",
         cwd=tmp_path, check=False,
     )  # fmt: skip
-    assert bad.returncode == 1
+    assert bad.returncode == 3
     assert "2 quality rule(s) not mapped" in bad.stderr
 
 
@@ -432,7 +432,7 @@ def test_check_covers_generated_tests(tmp_path):
     target = next((out / "tests" / "generated").iterdir())
     target.write_text(target.read_text() + "-- hand edit\n")
     drift = _cli("check", cwd=tmp_path, check=False)
-    assert drift.returncode == 1
+    assert drift.returncode == 4
     target.unlink()
     missing = _cli("check", cwd=tmp_path, check=False)
-    assert missing.returncode == 1
+    assert missing.returncode == 4

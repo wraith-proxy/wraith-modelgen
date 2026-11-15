@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from modelgen.cli import app
 from modelgen.contract import EventContract
-from modelgen.introspect import FakeIntrospector, IntrospectedColumn
+from modelgen.introspect import IntrospectedColumn
 from modelgen.lint import errors, lint_contract
 from modelgen.scaffold import (
     ScaffoldError,
@@ -19,6 +19,7 @@ from modelgen.scaffold import (
     guess_unique_key,
     init_project,
 )
+from tests.fakes import FakeIntrospector
 
 runner = CliRunner()
 
@@ -237,7 +238,7 @@ class TestNewCommand:
             app,
             ["new", "my-project.landing.user_signups", "-o", str(tmp_path)],
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         assert (tmp_path / "user_signups.yml").read_text() == "existing"
 
     def test_force_overwrites(self, patched_bq, tmp_path):
@@ -259,7 +260,7 @@ class TestNewCommand:
         result = runner.invoke(app, ["new", "not-a-fqn", "-o", str(tmp_path)])
         assert result.exit_code == 2
 
-    def test_no_credentials_exits_1(self, monkeypatch, tmp_path):
+    def test_no_credentials_exits_5(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
             "modelgen.introspect.has_default_credentials", lambda: False
         )
@@ -267,14 +268,14 @@ class TestNewCommand:
             app,
             ["new", "my-project.landing.user_signups", "-o", str(tmp_path)],
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 5
         assert "gcloud auth" in result.output
 
-    def test_unknown_table_exits_1(self, patched_bq, tmp_path):
+    def test_unknown_table_exits_5(self, patched_bq, tmp_path):
         result = runner.invoke(
             app, ["new", "my-project.landing.nope", "-o", str(tmp_path)]
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 5
 
     def test_generated_contract_survives_full_pipeline(
         self, patched_bq, tmp_path, monkeypatch
@@ -305,10 +306,10 @@ class TestInitCommand:
         assert (tmp_path / ".modelgen.yml").exists()
         assert "created" in result.output
 
-    def test_init_twice_exits_1(self, tmp_path):
+    def test_init_twice_exits_2(self, tmp_path):
         runner.invoke(app, ["init", str(tmp_path)])
         result = runner.invoke(app, ["init", str(tmp_path)])
-        assert result.exit_code == 1
+        assert result.exit_code == 2
 
 
 class TestDeterminism:

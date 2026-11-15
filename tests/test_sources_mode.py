@@ -291,7 +291,7 @@ def test_check_detects_hand_edit_of_sources_yml(tmp_path):
     target = out / SOURCES_YML
     target.write_text(target.read_text() + "# hand edit\n")
     res = _cli("check", "--diff", cwd=proj, check=False)
-    assert res.returncode == 1
+    assert res.returncode == 4
     assert "drift" in res.stdout.lower()
     assert "hand edit" in res.stdout
 
@@ -303,7 +303,7 @@ def test_check_detects_hand_edit_of_singular_test(tmp_path):
         out / "tests" / "generated" / "bus_positions__extract_row_count.sql"
     )
     target.write_text(target.read_text().replace("500000", "1"))
-    assert _cli("check", cwd=proj, check=False).returncode == 1
+    assert _cli("check", cwd=proj, check=False).returncode == 4
 
 
 @pytest.mark.parametrize(
@@ -315,14 +315,14 @@ def test_check_detects_missing_generated_file(tmp_path, rel):
     out = _generate(proj)
     (out / rel).unlink()
     res = _cli("check", cwd=proj, check=False)
-    assert res.returncode == 1
+    assert res.returncode == 4
     assert "missing" in res.stdout.lower()
 
 
 def test_check_with_nothing_generated_is_missing(tmp_path):
     proj = _project(tmp_path)
     res = _cli("check", cwd=proj, check=False)
-    assert res.returncode == 1
+    assert res.returncode == 4
     assert "missing" in res.stdout.lower()
 
 
@@ -432,14 +432,14 @@ def test_check_flags_hand_edit_in_tests_output(tmp_path):
     proj = _tests_project(tmp_path)
     target = proj / "tests" / "generated" / _ROW_COUNT
     target.write_text(target.read_text().replace("500000", "1"))
-    assert _cli("check", cwd=proj, check=False).returncode == 1
+    assert _cli("check", cwd=proj, check=False).returncode == 4
 
 
 def test_check_flags_missing_file_in_tests_output(tmp_path):
     proj = _tests_project(tmp_path)
     (proj / "tests" / "generated" / _ROW_COUNT).unlink()
     res = _cli("check", cwd=proj, check=False)
-    assert res.returncode == 1
+    assert res.returncode == 4
     assert "missing" in res.stdout.lower()
 
 

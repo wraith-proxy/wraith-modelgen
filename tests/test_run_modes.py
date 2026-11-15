@@ -40,7 +40,7 @@ def test_run_writes_extract_yml_and_check_is_clean(tmp_path):
         "sources_contracts: contracts/*.odcs.yaml\n"
         "sources_output: models/staging\n",
     )
-    assert _cli("check", cwd=proj, check=False).returncode == 1
+    assert _cli("check", cwd=proj, check=False).returncode == 4
     _cli("run", cwd=proj)
     assert (proj / "models" / "staging" / SOURCES_YML).is_file()
     assert "in sync" in _cli("check", cwd=proj).stdout.lower()
@@ -102,7 +102,7 @@ def test_run_fails_when_a_produced_pattern_matches_nothing(tmp_path):
     )
     res = _cli("run", cwd=proj, check=False)
     assert res.returncode == 1
-    assert "schema_contracts" in res.stdout
+    assert "schema_contracts" in res.stderr
 
 
 def test_run_exits_1_naming_a_produced_contract_that_fails_to_parse(
@@ -117,7 +117,7 @@ def test_run_exits_1_naming_a_produced_contract_that_fails_to_parse(
     (proj / "contracts" / "broken.odcs.yaml").write_text("schema: [\n")
     res = _cli("run", cwd=proj, check=False)
     assert res.returncode == 1
-    assert "broken.odcs.yaml" in res.stdout
+    assert "broken.odcs.yaml" in res.stderr
     assert list((proj / "models" / "marts").glob("*.yml"))
 
 

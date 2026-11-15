@@ -18,8 +18,12 @@ from typing import Any
 
 from modelgen.contract import (
     ContractError,
+    Issue,
     _load_doc,
     _select_server,
+    deprecation_notices,
+    read_contract,
+    safe_name,
     select_schema_objects,
 )
 from modelgen.dialect import get_dialect
@@ -118,15 +122,22 @@ def render_schema(
     server: str | None = None,
     tables: list[str] | None = None,
     unmapped: list[str] | None = None,
+    notices: list[Issue] | None = None,
 ) -> dict[str, str]:
     """{relative path: content} for one contract. Nothing is written.
 
     Besides the models yml, singular tests from quality rules appear
     under `tests/generated/`. Quality rules that cannot be mapped are
-    appended to `unmapped` as `<model>.<rule>`.
+    appended to `unmapped` as `<model>.<rule>`. Deprecation warnings are
+    appended to `notices`.
     """
-    doc = _load_doc(contract.read_text(), str(contract))
+    doc = _load_doc(read_contract(contract), str(contract))
+    if notices is not None:
+        notices.extend(deprecation_notices(doc))
     schemas, _ = select_schema_objects(doc, tables)
+    # The name becomes a test filename and a quoted ref() argument.
+    for obj in schemas:
+        safe_name("Schema object name", obj.get("name"))
 
     chosen = _select_server(doc.get("servers") or [], server)
     dialect = get_dialect(str(chosen["type"]))
