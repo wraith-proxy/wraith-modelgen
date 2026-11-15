@@ -28,6 +28,10 @@ Raised when the warehouse cannot be queried or the source table does not exist. 
 
 One table of an ODCS contract, parsed and validated. Load it with `EventContract.from_file` or `from_text` for a single-table contract, or `from_file_all` and `from_text_all` for every table in one.
 
+### Issue
+
+One problem found in a contract: a `code`, a `message`, and where it is: a JSON `pointer` plus 1-based `line` and `column` when known.
+
 ### Finding
 
 One result of linting a contract: its `severity`, rule `code`, `message`, and the staging `column` it concerns (empty for the whole contract).
@@ -55,3 +59,19 @@ The project settings read from `.modelgen.yml`. Load it with `ModelgenConfig.fro
 ### Introspector
 
 The protocol for reading a source table's columns from a warehouse: one method, `get_columns(project, dataset, table)`. Implement it to give `generate` columns from somewhere other than BigQuery.
+
+### run_project
+
+Generates every file a `ModelgenConfig` names and returns a `ProjectResult`. Files are written unless `dry_run=True`; each file's status is `written` or `dry_run`.
+
+### check_project
+
+Compares every file a `ModelgenConfig` names with what is on disk, without writing, and returns a `ProjectResult`. Each file's status is `in_sync`, `drift` (with the text found in `on_disk`) or `missing`.
+
+### ProjectResult
+
+What `run_project` and `check_project` return: the `contracts` read, one outcome per file in `files`, the `problems` found, and an `exit_code` that is the `ExitCode` the CLI would exit with.
+
+### ExitCode
+
+The CLI's exit codes as an `IntEnum`: `OK` 0, `INVALID` 1, `USAGE` 2, `LINT` 3, `DRIFT` 4, `ENVIRONMENT` 5, `INTERNAL` 6.
