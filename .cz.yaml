@@ -18,11 +18,13 @@ commitizen:
       Bug: PATCH
       bug: PATCH
 
-    # Removed '^' to allow emojis/prefixes to exist without breaking the match
-    bump_pattern: '(feature|fix|bug|break|Feature|Fix|Bug|Break)/[A-Z]{3}-\d{5}'
+    # commitizen anchors these patterns at the start of the message (re.match
+    # for changelog_pattern and commit_parser), so '^.*?' lets an emoji or
+    # other prefix precede 'type/TICKET'; dropping '^' alone does not.
+    bump_pattern: '^.*?(feature|fix|bug|break|Feature|Fix|Bug|Break)/[A-Z]{3}-\d{5}'
 
     # Parser: Extracts the type for the changelog even if there's an emoji before it
-    commit_parser: '(?P<change_type>feature|fix|bug|break|Feature|Fix|Bug|Break)/[A-Z]{3}-\d{5}: (?P<message>.*)'
+    commit_parser: '^.*?(?P<change_type>feature|fix|bug|break|Feature|Fix|Bug|Break)/[A-Z]{3}-\d{5}: (?P<message>.*)'
 
     change_type_map:
       Break: "Breaking Changes"
@@ -44,7 +46,7 @@ commitizen:
       - bug
       - Bug
 
-    changelog_pattern: '(feature|fix|bug|break|Feature|Fix|Bug|Break)/[A-Z]{3}-\d{5}'
+    changelog_pattern: '^.*?(feature|fix|bug|break|Feature|Fix|Bug|Break)/[A-Z]{3}-\d{5}'
 
     example: '👻 feature/TJP-00001: implement sovereign automation'
     message_template: '{{change_type}}: {{message}}'
