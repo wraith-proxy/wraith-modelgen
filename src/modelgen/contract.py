@@ -182,7 +182,12 @@ def read_contract(path: Path) -> str:
         raise _limit_error(
             f"Contract at {path} is larger than {MAX_CONTRACT_BYTES} bytes."
         )
-    return path.read_text()
+    try:
+        return path.read_text()
+    except UnicodeDecodeError as e:
+        raise ContractError(
+            f"Contract at {path} is not valid UTF-8: {e}"
+        ) from e
 
 
 @lru_cache(maxsize=None)

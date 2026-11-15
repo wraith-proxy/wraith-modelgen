@@ -1,7 +1,8 @@
 """Each failure class exits with its own code.
 
-Codes are asserted as literal numbers so these tests check the published
-contract independently of the ExitCode enum.
+CLI codes are asserted as literal numbers so these tests check the
+published contract independently of the ExitCode enum. The docs table is
+compared to the enum itself.
 """
 
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from modelgen.cli import app
+from modelgen.exit_codes import ExitCode
+from tests.fakes import FakeIntrospector
 
 ROOT = Path(__file__).parent.parent
 EXAMPLE = ROOT / "contracts" / "example_contract.yml"
@@ -134,13 +137,56 @@ def _exit_code_rows() -> list[tuple[int, str]]:
 
 
 def test_usage_docs_list_every_exit_code():
-    assert _exit_code_rows() == [
-        (0, "OK"),
-        (1, "INVALID"),
-        (2, "USAGE"),
-        (3, "LINT"),
-        (4, "DRIFT"),
-        (5, "ENVIRONMENT"),
-        (6, "INTERNAL"),
-    ]
+    assert _exit_code_rows() == [(int(c), c.name) for c in ExitCode]
     assert "docs/usage.md#exit-codes" in (ROOT / "README.md").read_text()
+
+
+def test_unsupported_odcs_version_exits_1(tmp_path):
+    text = EXAMPLE.read_text().replace(
+        "apiVersion: v3.0.2", "apiVersion: v9.9.9", 1
+    )
+    result = runner.invoke(app, ["validate", str(_contract(tmp_path, text))])
+    assert result.exit_code == 1, result.output
+
+
+def _no_schemas(monkeypatch):
+    monkeypatch.setattr(
+        "modelgen.introspect.BigQueryIntrospector",
+        lambda: FakeIntrospector({}),
+    )
+    monkeypatch.setattr(
+        "modelgen.introspect.has_default_credentials", lambda: True
+    )
+
+
+def test_failed_introspection_in_gen_exits_5(tmp_path, monkeypatch):
+    _no_schemas(monkeypatch)
+    result = runner.invoke(
+        app, ["gen", str(_contract(tmp_path)), "--raw", "--introspect"]
+    )
+    assert result.exit_code == 5, result.output
+
+
+def test_environment_failure_outranks_an_invalid_contract(
+    tmp_path, monkeypatch
+):
+    _no_schemas(monkeypatch)
+    config = _project(
+        tmp_path,
+        {"a.yml": EXAMPLE.read_text(), "b_invalid.yml": "name: [unclosed\n"},
+    )
+    for command in ("run", "check"):
+        result = runner.invoke(
+            app, [command, "--config", str(config), "--introspect"]
+        )
+        assert result.exit_code == 5, result.output
+
+
+def test_lint_failure_outranks_drift_in_check(tmp_path):
+    config = _project(tmp_path, {"example.yml": EXAMPLE.read_text()})
+    runner.invoke(app, ["run", "--config", str(config)])
+    generated = next((tmp_path / "models" / "raw").glob("*.sql"))
+    generated.write_text(generated.read_text() + "\n-- hand edit\n")
+    (tmp_path / "contracts" / "z_lint.yml").write_text(_lint_failing())
+    result = runner.invoke(app, ["check", "--config", str(config)])
+    assert result.exit_code == 3, result.output

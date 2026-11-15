@@ -17,8 +17,8 @@ from modelgen.generator import (
     write_generated,
 )
 from modelgen.introspect import IntrospectionError, IntrospectorChooser
-from modelgen.lint import Finding, lint_contract
 from modelgen.lint import errors as lint_errors
+from modelgen.lint import lint_contract
 
 
 class FileStatus(str, Enum):
@@ -47,6 +47,8 @@ class Problem:
     message: str
     exit_code: ExitCode
     issues: tuple = ()
+    event: str | None = None
+    code: str = "contract"
 
 
 @dataclass
@@ -57,6 +59,7 @@ class ProjectResult:
     unmapped_rules: list[str]
     new_source_columns: list[tuple[str, list[str]]]
     notices: list[tuple[Path, Issue]] = field(default_factory=list)
+    unmapped_by_contract: list[tuple[Path, str]] = field(default_factory=list)
 
     @property
     def exit_code(self) -> ExitCode:
@@ -85,15 +88,18 @@ class _Unit:
 class _Rendered:
     contracts: list[Path] = field(default_factory=list)
     items: list[_Unit | Problem] = field(default_factory=list)
-    unmapped: list[str] = field(default_factory=list)
+    unmapped: list[tuple[Path, str]] = field(default_factory=list)
     notices: list[tuple[Path, Issue]] = field(default_factory=list)
 
 
-def _lint_errors(event: EventContract) -> list[Finding]:
-    return lint_errors(lint_contract(event))
+def failure_class(e: GenerationError | IntrospectionError):
+    """The exit code and issue code for a failed generation."""
+    if isinstance(e, IntrospectionError):
+        return ExitCode.ENVIRONMENT, "introspection"
+    return ExitCode.INVALID, "generation"
 
 
-def _dest(output: Path, filename: str, tests_output: Path | None) -> Path:
+def dest_path(output: Path, filename: str, tests_output: Path | None) -> Path:
     """Where a rendered file lands; `tests/...` moves under tests_output."""
     parts = Path(filename).parts
     if tests_output is not None and parts[0] == "tests":
@@ -104,7 +110,7 @@ def _dest(output: Path, filename: str, tests_output: Path | None) -> Path:
 def _produced_files(
     cfg: ModelgenConfig,
     server: str | None,
-    unmapped: list[str],
+    unmapped: list[tuple[Path, str]],
     notices: list[tuple[Path, Issue]],
 ):
     """Yield (contract, mode, destination, content).
@@ -125,24 +131,26 @@ def _produced_files(
             continue
         for contract_path in files:
             found: list[Issue] = []
+            found_unmapped: list[str] = []
             try:
                 if mode == "schema":
                     rendered = render_schema(
                         contract_path,
                         server=server,
-                        unmapped=unmapped,
+                        unmapped=found_unmapped,
                         notices=found,
                     )
                 else:
                     rendered = render_sources(
-                        contract_path, unmapped=unmapped, notices=found
+                        contract_path, unmapped=found_unmapped, notices=found
                     )
             except ContractError as e:
                 yield contract_path, mode, e, ""
                 continue
             notices.extend((contract_path, n) for n in found)
+            unmapped.extend((contract_path, r) for r in found_unmapped)
             for filename, content in rendered.items():
-                dest = _dest(out_dir, filename, cfg.tests_output)
+                dest = dest_path(out_dir, filename, cfg.tests_output)
                 yield contract_path, mode, dest, content
 
 
@@ -185,7 +193,7 @@ def _render(
                 else f"{contract_path.name}:{event.name}"
             )
 
-            lint_errs = _lint_errors(event)
+            lint_errs = lint_errors(lint_contract(event))
             if lint_errs:
                 events.items.append(
                     Problem(
@@ -195,6 +203,7 @@ def _render(
                         "; ".join(f.message for f in lint_errs),
                         ExitCode.LINT,
                         tuple(lint_errs),
+                        event.name,
                     )
                 )
                 continue
@@ -215,15 +224,16 @@ def _render(
                         dry_run=True,
                     )
                 except (GenerationError, IntrospectionError) as e:
+                    code, issue_code = failure_class(e)
                     events.items.append(
                         Problem(
                             contract_path,
                             label,
                             layer.value,
                             str(e),
-                            ExitCode.ENVIRONMENT
-                            if isinstance(e, IntrospectionError)
-                            else ExitCode.INVALID,
+                            code,
+                            event=event.name,
+                            code=issue_code,
                         )
                     )
                     continue
@@ -287,9 +297,10 @@ def _empty_result(rendered: _Rendered) -> ProjectResult:
         rendered.contracts,
         [],
         [],
-        rendered.unmapped,
+        [rule for _, rule in rendered.unmapped],
         [],
         rendered.notices,
+        rendered.unmapped,
     )
 
 
@@ -328,6 +339,7 @@ def run_project(
                         item.layer,
                         str(e),
                         ExitCode.INVALID,
+                        code="generation",
                     )
                 )
                 continue

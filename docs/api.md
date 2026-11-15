@@ -30,7 +30,7 @@ One table of an ODCS contract, parsed and validated. Load it with `EventContract
 
 ### Issue
 
-One problem found in a contract: a `code`, a `message`, and where it is: a JSON `pointer` plus 1-based `line` and `column` when known.
+One problem found in a contract: a `code`, a `severity` (`error` or `warning`), a `message`, and where it is: a JSON `pointer` plus 1-based `line` and `column` when known. It has no `source`; the report attaches the contract path.
 
 ### Finding
 

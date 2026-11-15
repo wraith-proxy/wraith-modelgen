@@ -38,9 +38,10 @@ from modelgen.lint import warnings as lint_warnings
 from modelgen.project import (
     FileStatus,
     Problem,
-    _dest,
-    _lint_errors,
+    ProjectResult,
     check_project,
+    dest_path,
+    failure_class,
     run_project,
 )
 from modelgen.report import (
@@ -60,8 +61,18 @@ if TYPE_CHECKING:
     from modelgen.config import ModelgenConfig
 
 
+def _wants_json(argv: list[str]) -> bool:
+    for i, arg in enumerate(argv):
+        if arg.lower() == "--format=json":
+            return True
+        if arg == "--format" and argv[i + 1 : i + 2] == ["json"]:
+            return True
+    return False
+
+
 class _Group(typer.core.TyperGroup):
     def invoke(self, ctx: click.Context) -> Any:
+        argv = [*ctx._protected_args, *ctx.args]
         try:
             return super().invoke(ctx)
         except (
@@ -80,6 +91,17 @@ class _Group(typer.core.TyperGroup):
             )
             if logging.getLogger().isEnabledFor(logging.DEBUG):
                 typer.echo(traceback.format_exc(), err=True, nl=False)
+            if _wants_json(argv):
+                message = f"internal error: {type(e).__name__}: {e}"
+                emit(
+                    build_report(
+                        argv[0],
+                        ExitCode.INTERNAL,
+                        [],
+                        [plain_issue(".", "internal", message)],
+                        [],
+                    )
+                )
             raise typer.Exit(ExitCode.INTERNAL) from e
 
 
@@ -121,6 +143,39 @@ def _main(
     ),
 ) -> None:
     pass
+
+
+def _finish(
+    command: str,
+    code: ExitCode,
+    contract: Path,
+    issues: list[dict],
+    entries: list[dict],
+    as_json: bool,
+) -> None:
+    if as_json:
+        emit(build_report(command, code, [contract], issues, entries))
+    if code:
+        raise typer.Exit(code)
+
+
+def _contract_invalid(
+    command: str,
+    contract: Path,
+    error: ContractError,
+    issues: list[dict],
+    entries: list[dict],
+    as_json: bool,
+) -> None:
+    err_console.print(f"[red]Invalid contract:[/red] {escape(str(error))}")
+    issues.extend(contract_issue(contract, i) for i in error.issues)
+    _finish(command, ExitCode.INVALID, contract, issues, entries, as_json)
+
+
+def _emit_project(command: str, result: ProjectResult) -> None:
+    _print_problems(result.problems)
+    emit(project_report(command, result))
+    raise typer.Exit(result.exit_code)
 
 
 def _print_findings(findings: list[Finding]) -> None:
@@ -338,27 +393,21 @@ def gen(
     entries: list[dict] = []
 
     def finish(code: ExitCode) -> None:
-        if as_json:
-            emit(build_report("gen", code, [contract], issues, entries))
-        if code:
-            raise typer.Exit(code)
+        _finish("gen", code, contract, issues, entries, as_json)
 
     try:
         events = EventContract.from_file_all(
             contract, server=server, tables=table
         )
     except ContractError as e:
-        err_console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
-        issues.extend(contract_issue(contract, i) for i in e.issues)
-        finish(ExitCode.INVALID)
-        return
+        _contract_invalid("gen", contract, e, issues, entries, as_json)
 
     _print_notices(events[0].notices)
     issues.extend(contract_issue(contract, i) for i in events[0].notices)
     failed = 0
     positions = node_positions(read_contract(contract)) if as_json else {}
     for event in events:
-        lint_errs = _lint_errors(event)
+        lint_errs = lint_errors(lint_contract(event))
         if lint_errs:
             err_console.print(f"[bold]{event.name}[/bold]")
             _print_findings(lint_errs)
@@ -374,7 +423,6 @@ def gen(
             " for the full report."
         )
         finish(ExitCode.LINT)
-        return
 
     from modelgen.introspect import IntrospectorChooser
 
@@ -434,17 +482,13 @@ def gen(
             err_console.print(
                 "[dim]Fix the contract or the source. Then try again.[/dim]"
             )
-            introspection = isinstance(e, IntrospectionError)
+            exit_code, issue_code = failure_class(e)
             issues.append(
                 plain_issue(
-                    contract,
-                    "introspection" if introspection else "generation",
-                    str(e),
-                    object_name=event.name,
+                    contract, issue_code, str(e), object_name=event.name
                 )
             )
-            finish(ExitCode.ENVIRONMENT if introspection else ExitCode.INVALID)
-            return
+            finish(exit_code)
         results.append((event, result))
 
     table_out = Table(show_header=True, header_style="bold cyan")
@@ -557,10 +601,7 @@ def _write_schema(
     entries: list[dict] = []
 
     def finish(code: ExitCode) -> None:
-        if as_json:
-            emit(build_report(command, code, [contract], issues, entries))
-        if code:
-            raise typer.Exit(code)
+        _finish(command, code, contract, issues, entries, as_json)
 
     unmapped: list[str] = []
     notices: list[Issue] = []
@@ -578,15 +619,12 @@ def _write_schema(
                 notices=notices,
             )
     except ContractError as e:
-        err_console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
-        issues.extend(contract_issue(contract, i) for i in e.issues)
-        finish(ExitCode.INVALID)
-        return
+        _contract_invalid(command, contract, e, issues, entries, as_json)
     _print_notices(notices)
     issues.extend(contract_issue(contract, i) for i in notices)
     status = "dry_run" if dry_run else "written"
     for filename, content in files.items():
-        dest = _dest(output, filename, tests_output)
+        dest = dest_path(output, filename, tests_output)
         if not dry_run:
             try:
                 write_generated(dest, content, output, tests_output)
@@ -594,7 +632,6 @@ def _write_schema(
                 err_console.print(f"[red]{escape(str(e))}[/red]")
                 issues.append(plain_issue(contract, "generation", str(e)))
                 finish(ExitCode.INVALID)
-                return
         entries.append(file_entry(dest, layer, content, status))
         if not as_json:
             label = "dry-run" if dry_run else "written"
@@ -613,7 +650,6 @@ def _write_schema(
         )
         if failed:
             finish(ExitCode.LINT)
-            return
     finish(ExitCode.OK)
 
 
@@ -759,19 +795,10 @@ def validate(
     out = err_console if as_json else console
     issues: list[dict] = []
 
-    def finish(code: ExitCode) -> None:
-        if as_json:
-            emit(build_report("validate", code, [contract], issues, []))
-        if code:
-            raise typer.Exit(code)
-
     try:
         events = EventContract.from_file_all(contract, server=server)
     except ContractError as e:
-        err_console.print(f"[red]Invalid contract:[/red] {escape(str(e))}")
-        issues.extend(contract_issue(contract, i) for i in e.issues)
-        finish(ExitCode.INVALID)
-        return
+        _contract_invalid("validate", contract, e, issues, [], as_json)
 
     _print_notices(events[0].notices)
     issues.extend(contract_issue(contract, i) for i in events[0].notices)
@@ -807,7 +834,14 @@ def validate(
             f"  Columns:  {len(event.staging.columns)} staging declared\n"
             f"  Warnings: {len(warns)}{exempt_note}"
         )
-    finish(ExitCode.LINT if failed else ExitCode.OK)
+    _finish(
+        "validate",
+        ExitCode.LINT if failed else ExitCode.OK,
+        contract,
+        issues,
+        [],
+        as_json,
+    )
 
 
 @app.command()
@@ -862,7 +896,7 @@ def run(
       models/raw/         <- generated raw models (output)
       models/staging/     <- generated staging models (output)
     """
-    _configure_logging(verbose)
+    _configure_logging(verbose, err_console)
     from_contract = from_contract or not introspect
 
     from modelgen.config import ConfigError, ModelgenConfig
@@ -918,9 +952,7 @@ def run(
 
     _print_notices(n for _, n in result.notices)
     if as_json:
-        _print_problems(result.problems)
-        emit(project_report("run", result))
-        raise typer.Exit(result.exit_code)
+        _emit_project("run", result)
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Contract")
@@ -1007,7 +1039,7 @@ def check(
     Typical CI step:
       modelgen check --diff
     """
-    _configure_logging(verbose)
+    _configure_logging(verbose, err_console)
     from_contract = from_contract or not introspect
 
     from modelgen.config import ConfigError, ModelgenConfig
@@ -1039,9 +1071,7 @@ def check(
 
     _print_notices(n for _, n in result.notices)
     if output_format is OutputFormat.JSON:
-        _print_problems(result.problems)
-        emit(project_report("check", result))
-        raise typer.Exit(result.exit_code)
+        _emit_project("check", result)
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Contract")

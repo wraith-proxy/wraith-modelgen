@@ -6,6 +6,7 @@ Its shape is pinned by schema/modelgen-report-v1.json.
 import hashlib
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from modelgen import __version__
@@ -133,45 +134,45 @@ def unmapped_issues(
     ]
 
 
-_PROBLEM_CODE = {
-    ExitCode.INVALID: "generation",
-    ExitCode.ENVIRONMENT: "introspection",
-}
-
-
-def _problem_issues(problem: Problem) -> list[dict]:
-    event = problem.label.partition(":")[2] or None
+def _problem_issues(
+    problem: Problem, positions_of: Callable[[Path], dict]
+) -> list[dict]:
     if not problem.issues:
-        code = (
-            _PROBLEM_CODE.get(problem.exit_code, "contract")
-            if problem.layer != "parse"
-            else "contract"
-        )
         return [
             plain_issue(
-                problem.contract, code, problem.message, object_name=event
+                problem.contract,
+                problem.code,
+                problem.message,
+                object_name=problem.event,
             )
         ]
-    positions = (
-        node_positions(read_contract(problem.contract))
-        if any(isinstance(i, Finding) for i in problem.issues)
-        else {}
-    )
     return [
-        finding_issue(problem.contract, i, event, positions)
+        finding_issue(
+            problem.contract, i, problem.event, positions_of(problem.contract)
+        )
         if isinstance(i, Finding)
-        else contract_issue(problem.contract, i, event)
+        else contract_issue(problem.contract, i, problem.event)
         for i in problem.issues
     ]
 
 
 def project_report(command: str, result: ProjectResult) -> dict:
+    positions: dict[Path, dict] = {}
+
+    def positions_of(path: Path) -> dict:
+        if path not in positions:
+            positions[path] = node_positions(read_contract(path))
+        return positions[path]
+
     issues = [contract_issue(path, n) for path, n in result.notices]
-    issues += [i for p in result.problems for i in _problem_issues(p)]
-    issues += unmapped_issues(
-        result.contracts[0] if result.contracts else ".",
-        result.unmapped_rules,
-    )
+    issues += [
+        i for p in result.problems for i in _problem_issues(p, positions_of)
+    ]
+    for path in dict.fromkeys(p for p, _ in result.unmapped_by_contract):
+        issues += unmapped_issues(
+            path,
+            [r for p, r in result.unmapped_by_contract if p == path],
+        )
     files = [
         file_entry(
             f.path,

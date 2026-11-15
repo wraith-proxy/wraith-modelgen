@@ -96,9 +96,9 @@ Each issue has:
 
 | Field | Meaning |
 |---|---|
-| `source` | The contract path. |
-| `object` | The schema object (event) name when known, else `null`. |
-| `code` | A lint rule code (see [linting](linting.md)), or `schema.<keyword>`, `yaml`, `limit`, `odcs-version` or `contract` for a contract that could not be read. |
+| `source` | The contract path. For a malformed `.modelgen.yml`, the config path. |
+| `object` | The schema object (event) name when known, else `null`. For `quality-rule-unmapped` it is the rule, as `<model>.<rule>`. |
+| `code` | A lint rule code (see [linting](linting.md)), or one of: `schema.<keyword>`, `yaml`, `limit`, `odcs-version` or `contract` (a contract or `.modelgen.yml` that could not be read); `odcs-version-deprecated` (a warning, see [compatibility](compatibility.md)); `quality-rule-unmapped` (a quality rule with no dbt test; an error under `--strict`); `generation` (a model could not be generated); `introspection` (a source table could not be introspected); `internal` (an unexpected error, exit `6`). |
 | `severity` | `error` or `warning`. |
 | `message` | The human-readable message. |
 | `pointer` | JSON pointer into the contract (`""` is the document root), or `null`. |
