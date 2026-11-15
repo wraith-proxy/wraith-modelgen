@@ -8,6 +8,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Initial commit. Ghost Stack project scaffold. Nothing generated yet.
 
+## v0.17.0 (2026-11-15)
+
+### Breaking Changes
+
+- validate --format json; diagnostics go to stderr (#27)
+- each failure class has its own exit code (#25)
+
+### Bug Fixes
+
+- address review findings on the integration surface' (#32) from feature/integration-surface into main
+- address review findings on the integration surface
+- changelog patterns match commits with an emoji prefix (#30)
+
+### Features
+
+- compatibility policy; legacy ODCS versions deprecated (#31)
+- export Issue, ExitCode and the project API from the package root (#29)
+- --format json for gen, schema, sources, run and check (#28)
+- run and check return a result object from one shared loop (#21)
+- report every schema error with its location (#26)
+- declare the public Python API (#29)
+- treat contracts as untrusted input
+
 ## v0.16.0 (2026-11-14)
 
 ## v0.15.0 (2026-11-14)
