@@ -8,6 +8,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Initial commit. Ghost Stack project scaffold. Nothing generated yet.
 
+## v0.18.0 (2026-11-21)
+
+### Bug Fixes
+
+- refresh example model headers to 0.17.0' (#33) from feature/TJP-21111-duckdb-pseudonymise into main
+- refresh example model headers to 0.17.0
+- refresh golden version headers to 0.17.0
+
+### Features
+
+- pseudonymise classified columns on DuckDB
+
 ## v0.17.0 (2026-11-15)
 
 ### Breaking Changes
