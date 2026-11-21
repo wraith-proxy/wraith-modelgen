@@ -53,9 +53,9 @@ _Avoid_: offline mode, contract-only mode (clashes with **Mode**)
 ### Privacy
 
 **Subject**:
-The person a row is about, named by `modelgenSubjectField`. Its column is encrypted deterministically so joins survive erasure.
+The person a row is about, named by `modelgenSubjectField`. Its column is encrypted deterministically so joins survive erasure (on DuckDB: hashed, stable).
 _Avoid_: user, customer
 
 **Classification**:
-A property marked `pii` or `psi`. A classified column is encrypted on the way into staging.
+A property marked `pii` or `psi`. A classified column is encrypted on the way into staging. On a dialect with no encryption (DuckDB) the subject is pseudonymised with a hash and every other classified column is omitted from staging.
 _Avoid_: sensitivity, tag

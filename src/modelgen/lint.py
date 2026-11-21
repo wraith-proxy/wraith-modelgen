@@ -530,12 +530,21 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
     warn = _appender(findings, Severity.WARNING)
 
     dialect = get_dialect(contract.source.server_type)
-    if contract.encrypts and not dialect.supports_encryption():
-        err(
-            "dialect-unsupported-config",
-            f"classified properties need encryption, which the"
-            f" {dialect.display_name} dialect does not support.",
-        )
+    pseudonymises = not dialect.supports_encryption()
+    subject_source = contract.subject_field
+    if pseudonymises:
+        for col in contract.classified_columns:
+            if col.source in contract.unique_key and (
+                col.source != subject_source
+            ):
+                err(
+                    "classified-column-omitted",
+                    f"classified property {col.name!r} is part of the"
+                    f" unique key, but the {dialect.display_name} dialect"
+                    " omits classified columns from staging, so the key"
+                    " would reference a column the model never selects.",
+                    column=col.name,
+                )
 
     for col in staging.columns:
         if col.classification and col.classification not in _CLASSIFICATIONS:
@@ -549,8 +558,10 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
         # Encryption returns BYTES, so accepted_values could never match.
         # An enumerated column is also a category rather than a personal
         # value, and categories leak to frequency analysis.
-        if col.classification and any(
-            t.name == "accepted_values" for t in col.tests
+        if (
+            col.classification
+            and (not pseudonymises or col.source == subject_source)
+            and any(t.name == "accepted_values" for t in col.tests)
         ):
             err(
                 "classified-column-enumerated",
@@ -612,7 +623,7 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
         )
         return findings
 
-    if not subject.classification:
+    if not subject.classification and not pseudonymises:
         err(
             "subject-field-unclassified",
             f"modelgenSubjectField {contract.subject_field!r} identifies"
@@ -645,7 +656,9 @@ def _lint_classification(contract: EventContract) -> list[Finding]:
                 column=loaded_at.name,
             )
 
-    if not any(t.name == "not_null" for t in subject.tests):
+    if not pseudonymises and not any(
+        t.name == "not_null" for t in subject.tests
+    ):
         warn(
             "subject-field-untested",
             f"subject column {subject.name!r} has no not_null test. A"

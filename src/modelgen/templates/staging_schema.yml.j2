@@ -18,7 +18,11 @@ models:
 {% if col.classification %}
         meta:
           classification: {{ col.classification }}
+{% if pseudonymises %}
+          pseudonymised: true
+{% else %}
           encrypted: true
+{% endif %}
 {% endif %}
 {% if col.tests %}
         tests:

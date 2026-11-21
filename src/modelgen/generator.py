@@ -74,6 +74,12 @@ keyed as (
 )"""
 
 
+# A dialect with no AEAD cannot encrypt, so staging pseudonymises instead:
+# the subject becomes a stable hash (joins, counts and aggregates survive)
+# and every other classified column is left in the raw layer.
+_PSEUDONYM_TYPE = "VARCHAR"
+
+
 class Layer(str, Enum):
     RAW = "raw"
     STAGING = "staging"
@@ -193,13 +199,16 @@ def _validate_keys_present(
         )
 
 
-def _yml_column(col: StagingColumn, snapshot: bool) -> StagingColumn:
+def _yml_column(
+    col: StagingColumn, snapshot: bool, pseudonymised: bool = False
+) -> StagingColumn:
     """Rewrite a contract column into what the schema.yml should declare.
 
     A snapshot's grain is (key, ds), so a bare unique test fails as soon as
     a second partition lands, so scope it to the partition this run writes,
     as a literal so BigQuery prunes to it instead of scanning history. A
-    classified column arrives as BYTES, whatever its plaintext type was.
+    classified column arrives as BYTES, whatever its plaintext type was, and
+    a pseudonymised subject as VARCHAR.
     """
     tests = col.tests
     if snapshot:
@@ -209,9 +218,34 @@ def _yml_column(col: StagingColumn, snapshot: bool) -> StagingColumn:
             else t
             for t in tests
         ]
+    if pseudonymised:
+        return replace(col, type=_PSEUDONYM_TYPE, tests=tests)
     if col.classification:
         return replace(col, type=_CIPHERTEXT_TYPE, tests=tests)
     return replace(col, tests=tests)
+
+
+def _pseudonymises(contract: EventContract, dialect: Dialect) -> bool:
+    return contract.encrypts and not dialect.supports_encryption()
+
+
+def _staged_columns(
+    contract: EventContract, dialect: Dialect
+) -> list[StagingColumn]:
+    """The columns staging selects: all of them, or on a dialect that
+    cannot encrypt, the unclassified ones plus the subject."""
+    columns = contract.staging.columns
+    if not _pseudonymises(contract, dialect):
+        return columns
+    return [
+        c
+        for c in columns
+        if not c.classification or c.source == contract.subject_field
+    ]
+
+
+def _pseudonym_expr(col: StagingColumn, dialect: Dialect) -> str:
+    return f"sha256({_plaintext_expr(col, dialect)}) as {col.name}"
 
 
 def _plaintext_expr(col: StagingColumn, dialect: Dialect) -> str:
@@ -393,21 +427,18 @@ def render_staging(
         )
 
     dialect = get_dialect(contract.source.server_type)
-    if contract.encrypts and not dialect.supports_encryption():
-        raise GenerationError(
-            f"The {dialect.display_name} dialect cannot encrypt classified"
-            " columns. Remove the classification or use a BigQuery server."
-        )
+    pseudonymises = _pseudonymises(contract, dialect)
+    staged = _staged_columns(contract, dialect)
     # A dialect without a partition column has no `ds` to stamp.
     snapshot = contract.staging.is_snapshot and dialect.has_partition_column()
     incremental = dialect.materialization(contract, "staging") == "incremental"
-    encrypts = contract.encrypts
-    raw_cols = _join_cols(
-        [c.source for c in contract.staging.columns], indent=8
-    )
+    encrypts = contract.encrypts and not pseudonymises
+    raw_cols = _join_cols([c.source for c in staged], indent=8)
     exprs = [
-        _transform_expr(c, contract.subject_field, dialect)
-        for c in contract.staging.columns
+        _pseudonym_expr(c, dialect)
+        if pseudonymises and c.source == contract.subject_field
+        else _transform_expr(c, contract.subject_field, dialect)
+        for c in staged
     ]
     if snapshot:
         exprs.append(_DS_COLUMN)
@@ -422,8 +453,15 @@ def render_staging(
         "yml_config": dialect.render_yml_config(contract, "staging"),
         "snapshot": snapshot,
         "staging_columns": [
-            _yml_column(c, snapshot) for c in contract.staging.columns
+            _yml_column(
+                c,
+                snapshot,
+                pseudonymised=pseudonymises
+                and c.source == contract.subject_field,
+            )
+            for c in staged
         ],
+        "pseudonymises": pseudonymises,
         "keystore_cte": (
             _KEYSTORE_CTE.format(
                 aad=_AAD,

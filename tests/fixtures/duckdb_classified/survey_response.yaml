@@ -1,0 +1,50 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: 3b9a6e52-1c47-4f0d-8a2e-6d5c7e8f9a01
+name: survey_response
+version: 1.0.0
+status: active
+
+servers:
+  - server: warehouse
+    type: duckdb
+    database: warehouse.duckdb
+    schema: main
+
+schema:
+  - id: survey_response_obj
+    name: survey_response
+    physicalName: survey_response
+    logicalType: object
+    physicalType: table
+    description: One row per survey response, with the colleague it names.
+    customProperties:
+      - property: modelgenLoadedAtField
+        value: submitted_at
+      - property: modelgenSubjectField
+        value: response_id
+      - property: modelgenStaging
+        value:
+          materialization: table
+    properties:
+      - name: response_id
+        logicalType: string
+        physicalType: VARCHAR
+        primaryKey: true
+        primaryKeyPosition: 1
+        required: true
+        description: Identifier of the respondent, the data subject of the row.
+      - name: colleague_name
+        logicalType: string
+        physicalType: VARCHAR
+        classification: pii
+        description: Name of the colleague the respondent wrote about.
+      - name: score
+        logicalType: integer
+        physicalType: BIGINT
+        description: Score from one to ten that the respondent gave.
+      - name: submitted_at
+        logicalType: timestamp
+        physicalType: TIMESTAMP
+        required: true
+        description: When the response was submitted, in UTC.
