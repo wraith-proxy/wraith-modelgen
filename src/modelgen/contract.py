@@ -39,6 +39,10 @@ materialised in plaintext. modelgenSubjectField names the source column
 identifying the data subject: it is encrypted deterministically so joins
 survive a crypto-shred, and it is the keystore lookup for every other
 classified column on the row.
+
+A dialect with no encryption (DuckDB) pseudonymises instead: the subject
+column becomes a stable sha256 hash and every other classified column is
+omitted from staging, so it exists in the raw layer only.
 """
 
 from __future__ import annotations

@@ -52,7 +52,8 @@ edit to fix each finding.
 | `cluster-column-classified` | `clusterBy` names a classified column. Encryption emits BYTES and BigQuery cannot cluster on BYTES |
 | `partition-field-classified` | `partitionBy.field` is classified. BigQuery partitions on date, timestamp, datetime or int64 only |
 | `loaded-at-classified` | `modelgenLoadedAtField` is classified while `materialization: incremental`. The high-water-mark filter would compare a timestamp against ciphertext. A load timestamp is pipeline metadata, not personal data |
-| `dialect-unsupported-config` | The contract's dialect cannot honour the config. DuckDB has no partitions or clustering (`partitionBy`, `clusterBy` on a non-snapshot) and no encryption (classified columns) |
+| `dialect-unsupported-config` | The contract's dialect cannot honour the config. DuckDB has no partitions or clustering (`partitionBy`, `clusterBy` on a non-snapshot) |
+| `classified-column-omitted` | A classified property that is not the subject is part of the unique key, but the dialect has no encryption and omits classified columns from staging, so the key would reference a column the model never selects |
 | `invalid-exemption-reason` | A `modelgenExempt` entry declares no `reason`. Every exemption has to say why the rule does not apply |
 | `invalid-freshness-period` | `modelgenRaw.freshness` uses a period other than `minute`, `hour`, or `day` |
 | `invalid-freshness-count` | `modelgenRaw.freshness` declares a count that is not a positive integer |
@@ -65,7 +66,7 @@ edit to fix each finding.
 | `low-quality-column-description` | A property has a `description`, but it is under 50 characters or it only restates the column name. |
 | `missing-freshness` | `modelgenRaw` declares no `freshness` block, so `dbt source freshness` has nothing to check. |
 | `unique-key-untested` | The `primaryKey` property carries no tests. Consider `required: true` + `unique: true`. |
-| `subject-field-untested` | The subject column has no `not_null` test. A row whose subject has no keyset encrypts to NULL and nothing would surface it. Set `required: true`. |
+| `subject-field-untested` | On BigQuery, the subject column has no `not_null` test. A row whose subject has no keyset encrypts to NULL and nothing would surface it. Set `required: true`. |
 
 ## Column descriptions
 

@@ -369,7 +369,7 @@ DuckDB limits, enforced by lint or generation:
 
 - Models are views unless the contract says `materialization: table`. Staging `incremental` passes lint but renders as a view.
 - No partitions or clustering. Declaring `partitionBy` or `clusterBy` is a lint error. The derived `ds` partition of a snapshot is the one exception, and DuckDB never adds a `ds` column.
-- No encryption. Lint reports classified columns as `dialect-unsupported-config`, and generation refuses them.
+- No encryption. Classified columns are pseudonymised instead: the `modelgenSubjectField` column is staged as `sha256(cast(<col> as VARCHAR))`, a stable hash, so joins, counts and aggregates still work; every other classified column is omitted from staging and stays in the raw layer only. A classified column in the unique key is a lint error (`classified-column-omitted`), since staging would not select it.
 
 ### Choosing a server
 
@@ -497,7 +497,7 @@ stable per keyset and joins, row counts and aggregates all survive erasure.
 Everything else is randomised. Both resolve their keyset from a keystore
 holding one wrapped key pair per subject.
 
-This is BigQuery only. DuckDB has no encryption, so lint reports classified columns as `dialect-unsupported-config` and generation refuses them.
+Encryption is BigQuery only. DuckDB has no AEAD, so staging there pseudonymises the subject column as a stable sha256 hash and omits every other classified column (they exist in the raw layer only). A hash is not erasure: there is no keystore to delete from, so the raw layer is where the personal data remains.
 
 **Right to erasure is one DELETE.** Destroy the subject's keystore row and
 every ciphertext written under those keys becomes unrecoverable, across

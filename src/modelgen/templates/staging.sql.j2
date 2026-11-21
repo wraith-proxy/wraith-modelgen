@@ -21,6 +21,12 @@
   Subject column: deterministic, so joins survive the shred. Everything
   else: randomised. Erasure is one DELETE from the keystore.
 {% endif %}
+{% if pseudonymises %}
+
+  This dialect cannot encrypt. The subject column is pseudonymised here as
+  a stable sha256 hash, so joins, counts and aggregates still work. Every
+  other classified column is omitted and lives in the raw layer only.
+{% endif %}
 
   Upstream: {{ event.raw_model_name }}
 */

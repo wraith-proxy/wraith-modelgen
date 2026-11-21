@@ -147,3 +147,64 @@ def test_duckdb_output_deterministic(tmp_path):
     )
     assert r.returncode == 0, r.stdout
     assert any((tmp_path / "a").glob("*.sql"))
+
+
+CLASSIFIED = HERE / "fixtures" / "duckdb_classified" / "survey_response.yaml"
+CLASSIFIED_GOLDEN = HERE / "golden" / "duckdb_classified"
+
+
+def test_duckdb_pseudonymises_subject_and_omits_classified(tmp_path):
+    contract = EventContract.from_file(CLASSIFIED)
+    assert not [f for f in lint_contract(contract) if f.is_error]
+    _gen(CLASSIFIED, tmp_path, "0")
+    names = sorted(p.name for p in tmp_path.iterdir())
+    assert names == sorted(p.name for p in CLASSIFIED_GOLDEN.iterdir())
+    for name in names:
+        got = (tmp_path / name).read_text()
+        assert got == (CLASSIFIED_GOLDEN / name).read_text()
+    staging = (tmp_path / "stg__survey_response.sql").read_text()
+    assert "sha256(cast(response_id as VARCHAR)) as response_id" in staging
+    assert "colleague_name" not in staging
+    assert (
+        "colleague_name"
+        not in (tmp_path / "stg__survey_response.yml").read_text()
+    )
+    assert (
+        "colleague_name" in (tmp_path / "raw__survey_response.sql").read_text()
+    )
+
+
+def test_duckdb_classified_unique_key_is_an_error():
+    text = CLASSIFIED.read_text().replace(
+        "        classification: pii\n",
+        "        classification: pii\n        primaryKey: true\n"
+        "        primaryKeyPosition: 2\n",
+    )
+    codes = {f.code for f in lint_contract(EventContract.from_text(text))}
+    assert "classified-column-omitted" in codes
+    assert "dialect-unsupported-config" not in codes
+
+
+def test_duckdb_classified_without_subject_is_an_error():
+    text = CLASSIFIED.read_text().replace(
+        "      - property: modelgenSubjectField\n        value: response_id\n",
+        "",
+    )
+    codes = {f.code for f in lint_contract(EventContract.from_text(text))}
+    assert "subject-field-not-declared" in codes
+
+
+def test_duckdb_classified_subject_is_hashed_and_marked(tmp_path):
+    text = CLASSIFIED.read_text().replace(
+        "        primaryKey: true\n        primaryKeyPosition: 1\n",
+        "        primaryKey: true\n        primaryKeyPosition: 1\n"
+        "        classification: pii\n",
+    )
+    contract = tmp_path / "survey_response.yaml"
+    contract.write_text(text)
+    _gen(contract, tmp_path / "out", "0")
+    out = tmp_path / "out"
+    assert "sha256(" in (out / "stg__survey_response.sql").read_text()
+    yml = (out / "stg__survey_response.yml").read_text()
+    assert "pseudonymised: true" in yml
+    assert "encrypted" not in yml

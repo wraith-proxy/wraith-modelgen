@@ -170,8 +170,11 @@ DuckDB limits, enforced by lint or generation:
 - No partitions or clustering. Declaring `partitionBy` or `clusterBy` is a lint
   error. The derived `ds` partition of a snapshot is the one exception, and
   DuckDB never adds a `ds` column.
-- No encryption. Lint reports classified columns as `dialect-unsupported-config`
-  and generation refuses them.
+- No encryption. Classified columns are pseudonymised instead: the
+  `modelgenSubjectField` column is staged as a stable `sha256` hash and every
+  other classified column is omitted from staging, so it exists in the raw layer
+  only. A classified column in the unique key is a lint error
+  (`classified-column-omitted`).
 
 ### Choosing a server
 
