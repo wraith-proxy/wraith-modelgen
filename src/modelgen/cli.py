@@ -1018,6 +1018,15 @@ def check(
             " --format json."
         ),
     ),
+    ignore_version: bool = typer.Option(
+        False,
+        "--ignore-version",
+        help=(
+            "Treat a file that differs only in the modelgen version of its"
+            " GENERATED header as in sync, so a modelgen upgrade alone is"
+            " not drift."
+        ),
+    ),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Enable debug logging."
     ),
@@ -1073,7 +1082,11 @@ def check(
         _stop("check", ExitCode.OK, output_format, cfg)
 
     result = check_project(
-        cfg, server=server, from_contract=from_contract, notify=_notify
+        cfg,
+        server=server,
+        from_contract=from_contract,
+        notify=_notify,
+        ignore_version=ignore_version,
     )
 
     _print_notices(n for _, n in result.notices)

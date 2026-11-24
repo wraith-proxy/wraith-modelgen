@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from modelgen.generator import mask_version
+
 HERE = Path(__file__).parent
 CONTRACT = (
     HERE / "fixtures" / "real_contracts" / "bus-positions-extract.odcs.yaml"
@@ -227,7 +229,9 @@ def test_golden_matches(tmp_path):
     for p in GOLDEN.rglob("*"):
         if p.is_file():
             rel = p.relative_to(GOLDEN)
-            assert (tmp_path / rel).read_text() == p.read_text()
+            assert mask_version((tmp_path / rel).read_text()) == (
+                mask_version(p.read_text())
+            )
 
 
 def test_output_deterministic_and_free_of_paths(tmp_path):

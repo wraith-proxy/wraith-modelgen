@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from modelgen.generator import mask_version
+
 HERE = Path(__file__).parent
 GOLDEN = HERE / "golden" / "valid_values"
 _RUNNER = "from modelgen.cli import main; main()"
@@ -101,7 +103,7 @@ def _contract(tmp_path: Path, form: str) -> Path:
 
 def _files(root: Path) -> dict[Path, str]:
     return {
-        p.relative_to(root): p.read_text()
+        p.relative_to(root): mask_version(p.read_text())
         for p in root.rglob("*")
         if p.is_file()
     }

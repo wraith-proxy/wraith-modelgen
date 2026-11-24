@@ -105,7 +105,7 @@ flowchart TD
 
 ## Design decisions
 
-**Deterministic output.** Same contract + same source schema = byte-identical files. No timestamps, no paths. CI can diff generated output against committed output (`modelgen check`) to catch contract drift without running a BigQuery query. The header embeds the modelgen version, so an upgrade drifts every file until regenerated.
+**Deterministic output.** Same contract + same source schema = byte-identical files. No timestamps, no paths. CI can diff generated output against committed output (`modelgen check`) to catch contract drift without running a BigQuery query. The header embeds the modelgen version, so an upgrade drifts every file until regenerated, unless `check` runs with `--ignore-version`.
 
 **The contract is the source of truth by default.** Under contract-only introspection, the default, column names and types come from the contract's declarations, so output depends on the contract alone. `--introspect` makes BigQuery the source of truth for the columns of BigQuery event contracts: raw column metadata comes from the live source schema, and the contract declares only what the consumer cares about. `modelgen check --introspect`, with credentials, is the CI gate for drift between contract and warehouse; without credentials it falls back to contract-only introspection with a notice. DuckDB event contracts and all produced and extract contracts are never compared with a live table.
 

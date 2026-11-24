@@ -313,6 +313,7 @@ modelgen check [OPTIONS]
 |---|---|
 | `-c`, `--config PATH` | Path to `.modelgen.yml`. Auto-discovered if not given |
 | `--diff` | Print a unified diff for every drifted file |
+| `--ignore-version` | Treat a file that differs only in the modelgen version of its `GENERATED` header as in sync |
 | `-s`, `--server ID` | Pick the server by its `server:` id. Extract contracts ignore it |
 | `-v`, `--verbose` | Debug logging |
 | `--introspect` | Query BigQuery for source columns. Off by default |
@@ -333,8 +334,15 @@ got committed all fail loudly:
 - name: Verify generated models match contracts
   run: |
     uv tool install wraith-modelgen
-    modelgen check --diff --from-contract
+    modelgen check --diff --from-contract --ignore-version
 ```
+
+`--ignore-version` keeps a modelgen upgrade from failing this step. The
+first line of every generated file stamps the modelgen version, so without
+the flag each release drifts every committed file until it is regenerated.
+The flag masks only that version; any other difference, including the rest
+of the header line, is still drift. Leave it off to treat the stamp as a
+drift signal.
 
 That step compares the committed files with what the contracts render. It
 never reads the warehouse, so it cannot see a source table that has moved

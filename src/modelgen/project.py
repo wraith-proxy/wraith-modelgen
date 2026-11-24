@@ -14,6 +14,7 @@ from modelgen.generator import (
     GenerationError,
     Layer,
     generate,
+    mask_version,
     write_generated,
 )
 from modelgen.introspect import IntrospectionError, IntrospectorChooser
@@ -417,8 +418,13 @@ def check_project(
     server: str | None,
     from_contract: bool,
     notify: Callable[[str], None],
+    ignore_version: bool = False,
 ) -> ProjectResult:
-    """Compare every file .modelgen.yml names against what is on disk."""
+    """Compare every file .modelgen.yml names against what is on disk.
+
+    With `ignore_version`, a file that differs only in the modelgen
+    version of its header is in sync.
+    """
     rendered = _render(
         cfg,
         server=server,
@@ -436,7 +442,10 @@ def check_project(
             on_disk = dest.read_text() if dest.exists() else None
             if on_disk is None:
                 status = FileStatus.MISSING
-            elif on_disk == content:
+            elif on_disk == content or (
+                ignore_version
+                and mask_version(on_disk) == mask_version(content)
+            ):
                 status, on_disk = FileStatus.IN_SYNC, None
             else:
                 status = FileStatus.DRIFT

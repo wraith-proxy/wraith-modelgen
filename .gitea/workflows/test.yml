@@ -23,7 +23,7 @@ jobs:
             uv run modelgen validate "$contract" --strict
           done
       - name: Verify Committed Models Match Contracts
-        run: uv run modelgen check --from-contract --diff
+        run: uv run modelgen check --from-contract --ignore-version --diff
 
   auto-merge:
     needs: test-and-verify

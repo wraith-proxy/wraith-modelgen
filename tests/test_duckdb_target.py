@@ -14,7 +14,7 @@ from modelgen.dialect import (
     UnknownDialectError,
     get_dialect,
 )
-from modelgen.generator import Layer, generate
+from modelgen.generator import Layer, generate, mask_version
 from modelgen.introspect import ContractIntrospector
 from modelgen.lint import lint_contract
 
@@ -37,7 +37,9 @@ def test_duckdb_contract_generates_models(tmp_path):
     names = sorted(p.name for p in tmp_path.iterdir())
     assert names == sorted(p.name for p in GOLDEN.iterdir())
     for name in names:
-        assert (tmp_path / name).read_text() == (GOLDEN / name).read_text()
+        assert mask_version((tmp_path / name).read_text()) == mask_version(
+            (GOLDEN / name).read_text()
+        )
 
 
 def test_no_bigquery_constructs_in_duckdb_output(tmp_path):
@@ -161,7 +163,9 @@ def test_duckdb_pseudonymises_subject_and_omits_classified(tmp_path):
     assert names == sorted(p.name for p in CLASSIFIED_GOLDEN.iterdir())
     for name in names:
         got = (tmp_path / name).read_text()
-        assert got == (CLASSIFIED_GOLDEN / name).read_text()
+        assert mask_version(got) == mask_version(
+            (CLASSIFIED_GOLDEN / name).read_text()
+        )
     staging = (tmp_path / "stg__survey_response.sql").read_text()
     assert "sha256(cast(response_id as VARCHAR)) as response_id" in staging
     assert "colleague_name" not in staging
