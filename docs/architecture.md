@@ -94,7 +94,7 @@ flowchart TD
 | `schema_mode.py` | Produced mode: models yml for tables the project produces (`modelgen schema`). |
 | `sources_mode.py` | Extract mode: sources yml for tables the project reads (`modelgen sources`). |
 | `yml_mode.py` | What the two yml modes share: the filename slug, `customProperties` as a mapping, and `emit()`, which dumps the yml and merges singular tests and unmapped rules. Object selection (`select_schema_objects`) lives in `contract.py`, which `EventContract` shares. |
-| `quality.py` | Maps ODCS quality rules to dbt tests for the schema and sources modes. Reports what it cannot map. |
+| `quality.py` | Maps ODCS quality rules to dbt tests for the schema and sources modes. Reports what it cannot map, there and in event staging. |
 | `config.py` | `.modelgen.yml` loading for `run` and `check`. |
 | `scaffold.py` | `init` project layout and the `new` draft contract. |
 | `cli.py` | Typer commands, Rich output, error handling. |

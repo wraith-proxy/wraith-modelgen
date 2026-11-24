@@ -205,6 +205,14 @@ def _print_notices(notices: Iterable[Issue]) -> None:
         )
 
 
+def _print_unmapped(rules: list[str]) -> None:
+    typer.echo(
+        f"modelgen: {len(rules)} quality rule(s) not mapped:"
+        f" {', '.join(rules)}",
+        err=True,
+    )
+
+
 def _notify(message: str) -> None:
     err_console.print(f"[yellow]{escape(message)}[/yellow]")
 
@@ -513,6 +521,11 @@ def gen(
             )
     if not as_json:
         console.print(table_out)
+    if layer == Layer.STAGING:
+        unmapped = [r for event, _ in results for r in event.unmapped_rules]
+        if unmapped:
+            _print_unmapped(unmapped)
+            issues.extend(unmapped_issues(contract, unmapped))
 
     for event, result in results:
         if result.new_source_columns:
@@ -639,11 +652,7 @@ def _write_schema(
             label = "dry-run" if dry_run else "written"
             console.print(f"{escape(str(dest))} {label}", highlight=False)
     if unmapped:
-        typer.echo(
-            f"modelgen: {len(unmapped)} quality rule(s) not mapped:"
-            f" {', '.join(unmapped)}",
-            err=True,
-        )
+        _print_unmapped(unmapped)
         failed = strict
         issues.extend(
             unmapped_issues(
@@ -971,11 +980,7 @@ def run(
 
     console.print(table)
     if result.unmapped_rules:
-        typer.echo(
-            f"modelgen: {len(result.unmapped_rules)} quality rule(s) not"
-            f" mapped: {', '.join(result.unmapped_rules)}",
-            err=True,
-        )
+        _print_unmapped(result.unmapped_rules)
 
     for event_name, cols in result.new_source_columns:
         console.print(

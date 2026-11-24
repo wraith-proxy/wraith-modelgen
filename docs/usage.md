@@ -206,8 +206,10 @@ modelgen gen CONTRACT [OPTIONS]
 | `-v`, `--verbose` | Debug logging |
 
 `--layer` takes exactly `schema` or `sources` and cannot be combined with
-`--raw` or `--staging`. `gen` has no `--strict`; use `modelgen schema
---strict` or `modelgen sources --strict`.
+`--raw` or `--staging`. With `--staging`, the quality rules staging does
+not map are reported on stderr as `modelgen: N quality rule(s) not mapped:
+<model>.<rule>`. `gen` has no `--strict`; use `modelgen schema --strict` or
+`modelgen sources --strict`.
 
 Exit `2`: neither or both of `--raw`/`--staging` given, `--layer` combined
 with them, an unknown `--layer` value, or `--server` with `--layer sources`.

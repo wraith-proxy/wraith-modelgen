@@ -189,6 +189,23 @@ def _singular(
     return "\n".join(lines)
 
 
+def _rule_id(rule: dict[str, Any], ordinal: int) -> str:
+    return slug(str(rule["id"])) if rule.get("id") else f"rule{ordinal}"
+
+
+def staging_unmapped(obj: dict[str, Any], model: str) -> list[str]:
+    """`<model>.<rule>` for each rule event staging drops: every rule but
+    a property's validValues, numbered as `map_object` numbers them."""
+    rules = [(r, False) for r in obj.get("quality") or []]
+    for p in obj.get("properties") or []:
+        rules += [(r, True) for r in p.get("quality") or []]
+    return [
+        f"{model}.{_rule_id(rule, ordinal)}"
+        for ordinal, (rule, on_property) in enumerate(rules, start=1)
+        if not (on_property and valid_values(rule) is not None)
+    ]
+
+
 def map_object(
     obj: dict[str, Any],
     header: str,
@@ -213,7 +230,7 @@ def map_object(
 
     used: set[str] = set()
     for ordinal, (rule, column) in enumerate(rules, start=1):
-        rid = slug(str(rule["id"])) if rule.get("id") else f"rule{ordinal}"
+        rid = _rule_id(rule, ordinal)
         label = f"{model}.{rid}"
         if not _map_rule(
             rule, column, props, model, rid, label, header, used, out,

@@ -91,7 +91,7 @@ Generates one layer, or one mode's yml, from one contract. Specify exactly one o
 modelgen gen contracts/bus-positions.odcs.yaml --staging -o models/staging
 ```
 
-The command prints a panel per event with its target model, then a File and Status table with `written`, or `dry-run` with `--dry-run`. Exit `0`.
+The command prints a panel per event with its target model, then a File and Status table with `written`, or `dry-run` with `--dry-run`. Exit `0`. With `--staging`, quality rules that staging does not map print on stderr as `modelgen: N quality rule(s) not mapped: <model>.<rule>`.
 
 Generating the yml for produced or read tables uses `--layer`:
 
@@ -656,7 +656,7 @@ Clean output ends with `Everything in sync. <n> file(s) match their contracts.` 
 ### Upgrade notes
 
 - Output is byte-identical for the same inputs. No timestamps, no paths. That is tested for `gen --raw` and `gen --staging` with `--from-contract`. The BigQuery path is not covered by that test.
-- ODCS quality rules are mapped per mode. `schema` and `sources` (and `gen --layer schema|sources`) map them through `src/modelgen/quality.py`: `validValues`, in either form, becomes `accepted_values`, zero `nullValues` and `duplicateValues` become `not_null` and `unique`, and `rowCount` with a bound becomes a row-count test. Other thresholds and `type: sql` rules become singular tests under `tests/generated/`. Anything unmapped is reported, never dropped. `gen --staging` maps only `validValues`, in either form, to `accepted_values` (`src/modelgen/contract.py`) and reports nothing it skips. `gen --raw` emits no quality tests. Review the generated tests after regeneration.
+- ODCS quality rules are mapped per mode. `schema` and `sources` (and `gen --layer schema|sources`) map them through `src/modelgen/quality.py`: `validValues`, in either form, becomes `accepted_values`, zero `nullValues` and `duplicateValues` become `not_null` and `unique`, and `rowCount` with a bound becomes a row-count test. Other thresholds and `type: sql` rules become singular tests under `tests/generated/`. Anything unmapped is reported, never dropped. `gen --staging` maps only `validValues`, in either form, to `accepted_values` (`src/modelgen/contract.py`) and now reports every other rule as unmapped, where it used to drop them silently. `gen --raw` emits no quality tests. Review the generated tests after regeneration.
 - Both `validValues` forms now map to `accepted_values` in every mode. Contracts that used the form a mode used to ignore (the library form under `gen --staging`, the property form under `schema` and `sources`) now gain `accepted_values` tests, which may fail on existing data. `schema --strict` and `sources --strict` no longer exit 3 on the property form.
 - `modelgen check` also checks the schema and sources layers when their config keys are set.
 - Several schema objects per contract: `gen` writes one model per object, in contract order. Check model names if a contract has several objects.
