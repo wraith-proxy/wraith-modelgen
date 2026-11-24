@@ -24,6 +24,7 @@ class ConfigError(ModelgenError, ValueError):
 _DEFAULT_CONTRACTS = "contracts/*.yml"
 _DEFAULT_RAW_OUTPUT = "models/raw"
 _DEFAULT_STAGING_OUTPUT = "models/staging"
+_GLOB_KEYS = ("contracts", "schema_contracts", "sources_contracts")
 _KEYS = (
     "contracts",
     "raw_output",
@@ -133,6 +134,9 @@ class ModelgenConfig:
                     f"{key!r} must be a string, got"
                     f" {type(value).__name__} in {path}"
                 )
+        for key in _GLOB_KEYS:
+            if raw.get(key) == "":
+                raise ConfigError(f"{key!r} must not be empty in {path}")
         cfg = cls._build(
             path.parent, {k: v for k, v in raw.items() if v is not None}
         )

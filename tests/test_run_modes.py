@@ -283,6 +283,21 @@ def test_every_known_key_rejects_non_string_values(
     assert f"'{key}' must be a string, got {type_name}" in res.stderr
 
 
+@pytest.mark.parametrize(
+    "key", ["contracts", "schema_contracts", "sources_contracts"]
+)
+def test_empty_glob_value_exits_1_naming_key(tmp_path, key):
+    (tmp_path / ".modelgen.yml").write_text(f"{key}: ''\n")
+    for command in ("run", "check"):
+        text = _cli(command, cwd=tmp_path, check=False)
+        assert text.returncode == 1
+        assert f"'{key}' must not be empty" in text.stderr
+        res = _cli(command, "--format", "json", cwd=tmp_path, check=False)
+        assert res.returncode == 1
+        [issue] = json.loads(res.stdout)["issues"]
+        assert f"'{key}' must not be empty" in issue["message"]
+
+
 def test_null_config_values_count_as_absent(tmp_path):
     (tmp_path / "contracts").mkdir()
     (tmp_path / "contracts" / "c.yml").write_text(EXAMPLE.read_text())

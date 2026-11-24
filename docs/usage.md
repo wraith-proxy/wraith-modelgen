@@ -380,7 +380,9 @@ failures the precedence above applies.
 `run` and `check` read it; `gen`, `schema`, `sources` and `validate` never do.
 Paths are relative to the file. Every key takes a string: any other value,
 such as `contracts: false`, is a config error (exit `1`) that names the key
-and the type it got (`'contracts' must be a string, got bool`). A key set to
+and the type it got (`'contracts' must be a string, got bool`). An empty
+string for `contracts`, `schema_contracts` or `sources_contracts` is a config
+error too. A key set to
 null counts as absent, so its default applies. Unknown keys are ignored with
 a warning that names the nearest valid key. Config warnings go to stderr and, with
 `--format json`, into `issues` with `severity: warning`. They do not change
