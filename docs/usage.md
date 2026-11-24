@@ -334,6 +334,36 @@ got committed all fail loudly:
     modelgen check --diff --from-contract
 ```
 
+That step compares the committed files with what the contracts render. It
+never reads the warehouse, so it cannot see a source table that has moved
+away from its contract. For BigQuery event contracts, run `check` with
+`--introspect` and Application Default Credentials instead. It is the CI
+gate for drift between contract and warehouse:
+
+```yaml
+# Needs Application Default Credentials in the job, for example
+# GOOGLE_APPLICATION_CREDENTIALS naming a service account key file
+- name: Verify contracts still match the warehouse
+  run: |
+    uv tool install wraith-modelgen
+    modelgen check --diff --introspect
+```
+
+- A contract column missing from the source table fails generation with
+  the column name, and `check` exits `1`.
+- A new source column changes the raw model's column list and shows as
+  drift on the raw model (exit `4`).
+- Without credentials it falls back to contract-only introspection and
+  prints `No GCP credentials found. Checking against contracts only.` A
+  green run there is not a warehouse check.
+- DuckDB event contracts and all produced and extract contracts are never
+  compared with a live table, with or without the flag. For them `check`
+  proves only that the committed files match the contract.
+
+Commit models generated with `modelgen run --introspect` for this gate, or
+`check` sees a different raw file (see
+[contract-only introspection](#offline-contract-only-introspection)).
+
 Exit `0`: in sync, or no contracts matched and no `schema_contracts` or
 `sources_contracts` pattern is set. Exit `4`: drift or missing files. A
 contract that fails to parse (`1`), lint (`3`) or introspect (`5`), a
@@ -486,11 +516,14 @@ released install; do not commit it. Generated quality tests call
 
 ## Schema evolution
 
-Source schemas change. wraith-modelgen validates the boundary and reports what broke.
+Source schemas change. With `--introspect` on a BigQuery event contract,
+wraith-modelgen validates the boundary and reports what broke. Under
+contract-only introspection, the default, it never reads the source and
+reports none of the changes below.
 
 | Scenario | Behaviour |
 |---|---|
-| New column added to source | Does **not** appear until you regenerate. Run `modelgen run` (or `modelgen gen --raw`) to pick it up. Invisible in staging until added to the contract. |
+| New column added to source | Does **not** appear until you regenerate. Run `modelgen run --introspect` (or `modelgen gen --raw --introspect`) to pick it up. Invisible in staging until added to the contract. |
 | Source column renamed | Update the property's `physicalName` (the `primaryKey` property too, if applicable). The staging `name` stays stable downstream. |
 | Source column retyped | Update staging `type:`. The `CAST` absorbs it. If values are incompatible, the warehouse will fail at query time. |
 | Source column dropped | Generation fails if staging still references it. Update the contract or restore the source column. |

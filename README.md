@@ -11,7 +11,7 @@
 
 Source schemas change. Columns get renamed, types get tightened, and new fields appear without warning. In most analytics codebases that change lands downstream: dashboards break, models fail, and the analytics team finds out from a support ticket.
 
-wraith-modelgen makes the data contract the change-management mechanism. The source team updates it as part of their release. wraith-modelgen regenerates the models. Downstream sees what it sees. Nothing breaks unless something it actually depended on disappears, which triggers a generation failure with the column name.
+wraith-modelgen makes the data contract the change-management mechanism. The source team updates it as part of their release. wraith-modelgen regenerates the models. Downstream sees what it sees. By default the contract's declarations are the source of truth and modelgen never reads the warehouse, so it cannot tell when a source table moves away from its contract. With `--introspect`, BigQuery is the source of truth for the columns of BigQuery event contracts: a column the contract names but the source no longer has fails generation with the column name, and `modelgen check --introspect` in CI is the gate for drift between contract and warehouse.
 
 ---
 
@@ -199,6 +199,8 @@ Drifted repo: a `--- <path>` header and a unified diff for each drifted file, th
 | `--from-contract` | The default. Kept so existing scripts keep working. |
 | `-s, --server ID` | Pick the server by its `server:` id. Applies to schema and event contracts. Extract contracts ignore it. |
 | `-v, --verbose` | Debug logging. |
+
+By default `check` compares the committed files with what the contracts render, and never reads the warehouse. For BigQuery event contracts, `modelgen check --introspect` with Application Default Credentials is the CI gate for drift between contract and warehouse. A contract column missing from the source table fails generation with the column name (exit `1`). A new source column changes the raw model's column list and shows as drift (exit `4`). Without credentials it falls back to contract-only introspection and prints `No GCP credentials found. Checking against contracts only.` DuckDB event contracts and all produced and extract contracts are never compared with a live table. The CI steps are in **[`modelgen check`](docs/usage.md#modelgen-check)**.
 
 When no contracts match the `contracts` glob and no `schema_contracts` or `sources_contracts` pattern is set, `check` prints `No contracts found.` and succeeds. A `schema_contracts` or `sources_contracts` pattern that matches no files fails even when other contracts exist.
 
@@ -513,14 +515,16 @@ citations: **[Keystore & Erasure](docs/bigquery/keystore.md)**.
 
 ## 🔄 Schema evolution
 
+The outcomes below need `--introspect` on a BigQuery event contract. Under contract-only introspection, the default, modelgen never reads the source and reports none of these changes. A renamed or dropped column then surfaces only when dbt runs the models.
+
 | Source change | What wraith-modelgen does | What you do |
 |---|---|---|
-| Adds a column | Does not appear until you regenerate (`modelgen run`). Invisible in staging until declared in the contract. | Regenerate, then add to staging when consumers need it. |
+| Adds a column | Does not appear until you regenerate (`modelgen run --introspect`). Invisible in staging until declared in the contract. | Regenerate, then add to staging when consumers need it. |
 | Renames a column | Validation fails: column not found in source. | Update the property's `physicalName`. The `modelgenLoadedAtField` too, if applicable. |
 | Retypes a column | Existing CAST in staging absorbs it (or fails loudly at query time if values are incompatible). | Update the property's `physicalType` if the canonical type should change too. |
 | Drops a column staging uses | Validation fails: column not found. | Either restore upstream or remove from staging contract. |
 
-Validation runs as part of `modelgen gen --staging`. If it passes, the generated staging model still presents the same contract to downstream consumers.
+Validation runs as part of `modelgen gen --staging --introspect`. If it passes, the generated staging model still presents the same contract to downstream consumers.
 
 ---
 
@@ -705,9 +709,9 @@ uv run cz commit
 ## 📜 Sovereign Principles
 
 1. **One layer per invocation.** Layers have different lifecycles; conflating them makes things harder to reason about.
-2. **Introspection at gen time.** The warehouse is the source of truth for column names and types. Drift is impossible because nothing is duplicated. Under `--from-contract`, the contract's declarations are the source of truth instead.
+2. **The contract is the source of truth by default.** Under contract-only introspection, the default, column names and types come from the contract's declarations. `--introspect` makes BigQuery the source of truth for the columns of BigQuery event contracts, and `modelgen check --introspect` is the CI gate for drift between contract and warehouse.
 3. **Deterministic output.** Same contract + same source schema = byte-identical files. `modelgen check` turns this into a CI gate.
-4. **Strict failure on missing columns.** No silent passes. If the contract references a column the source no longer has, generation fails with the column name.
+4. **Strict failure on missing columns.** With `--introspect`, if the contract references a column the source no longer has, generation fails with the column name. Contract-only introspection never sees the source, so it cannot fail this way.
 5. **Standards are enforced, exceptions are written down.** A rule that is wrong for one contract is exempted in the contract itself, with a reason, and the exemption stays visible on every run.
 6. **Dialects are explicit.** BigQuery and DuckDB ship in the box. A contract names its warehouse through `servers[].type`, and a new warehouse is a new dialect behind `get_dialect`.
 

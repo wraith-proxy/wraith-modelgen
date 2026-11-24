@@ -9,7 +9,7 @@ wraith-modelgen is a pipeline: contract in, dbt files out. Two model layers (raw
 ```mermaid
 flowchart TD
     A["📄 contract.yml"] --> B["EventContract.from_file()"]
-    B --> C["BigQueryIntrospector.get_columns()"]
+    B --> C["ContractIntrospector (default)\nor BigQueryIntrospector (--introspect)"]
     C --> D["render_raw() / render_staging()"]
     D --> E["generate()"]
     E --> F["raw__event.sql\nraw__event.yml"]
@@ -28,7 +28,7 @@ flowchart TD
     subgraph contract.py ["contract.py: parse + validate"]
         B
     end
-    subgraph introspect.py ["introspect.py: live schema from BQ"]
+    subgraph introspect.py ["introspect.py: columns from the contract or BQ"]
         C
     end
     subgraph generator.py ["generator.py: Jinja2 rendering + file write"]
@@ -49,11 +49,11 @@ flowchart LR
     RAW -->|"{{ ref(...) }}"| STG["stg__event\nStaging layer\nowned by analytics"]
     STG --> DOWN["Downstream\nconsumers"]
 
-    CTR["📄 contract.yml"] -. "introspects schema\nat gen time" .-> SRC
+    CTR["📄 contract.yml"] -. "with --introspect:\nschema read at gen time" .-> SRC
     CTR -. "declares columns,\ncasts, renames" .-> STG
 ```
 
-**Raw** mirrors the source schema, with columns introspected explicitly at generation time. New source columns appear after the next `modelgen run`, not automatically. The source team can add columns without coordinating with analytics, but a regeneration is required to pick them up.
+**Raw** lists its columns explicitly. Under contract-only introspection, the default, they are the contract's declared columns and keys. With `--introspect` on a BigQuery event contract, raw mirrors the source schema, and new source columns appear after the next `modelgen run --introspect`, not automatically. The source team can add columns without coordinating with analytics, but a regeneration is required to pick them up.
 
 **Staging** is the consumer contract. Explicit column selection, renames, and casts. Schema drift is absorbed here; downstream consumers only see the stable contract names. It materialises as a datestamped daily snapshot by default, one full copy of the dimension per `ds` partition, so history is a partition filter and backfills are independent of each other.
 
@@ -61,11 +61,11 @@ flowchart LR
 
 ## Schema evolution
 
-wraith-modelgen surfaces schema changes at generation time, before they affect production.
+With `--introspect` on a BigQuery event contract, wraith-modelgen surfaces schema changes at generation time, before they affect production. Under contract-only introspection, the default, it never reads the source, so none of the checks below run.
 
 ```mermaid
 flowchart TD
-    GEN["modelgen gen --staging"] --> VAL["Validate: all staging contract columns\npresent in source schema?"]
+    GEN["modelgen gen --staging --introspect"] --> VAL["Validate: all staging contract columns\npresent in source schema?"]
     VAL -->|"yes"| RENDER["Render staging model\ncast + rename all declared columns"]
     VAL -->|"no: column missing"| FAIL["GenerationError\n'column X not found in source'\nUpdate the contract or restore the source column"]
     RENDER --> NOTIFY{"New source columns\nnot in staging contract?"}
@@ -76,7 +76,7 @@ flowchart TD
 
 | Source change | What happens | What you do |
 |---|---|---|
-| Adds a column | Flows into raw automatically. Invisible in staging. | Add to staging when consumers need it. |
+| Adds a column | Appears in raw after the next `modelgen run --introspect`. Invisible in staging. | Add to staging when consumers need it. |
 | Renames a column | Validation fails: column not found in source. | Update the property's `physicalName`. Also `modelgenLoadedAtField` if applicable. |
 | Retypes a column | Existing `CAST` absorbs it or fails loudly at query time. | Update the property's `physicalType` if the canonical type changes. |
 | Drops a column staging uses | Validation fails: column not found. | Restore upstream or remove from staging contract. |
@@ -107,8 +107,8 @@ flowchart TD
 
 **Deterministic output.** Same contract + same source schema = byte-identical files. No timestamps, no paths. CI can diff generated output against committed output (`modelgen check`) to catch contract drift without running a BigQuery query. The header embeds the modelgen version, so an upgrade drifts every file until regenerated.
 
-**Introspection at gen time, not contract time.** The contract only declares what the consumer cares about. Raw column metadata comes from the live source schema. The warehouse is the source of truth for column names and types; the contract never duplicates them.
+**The contract is the source of truth by default.** Under contract-only introspection, the default, column names and types come from the contract's declarations, so output depends on the contract alone. `--introspect` makes BigQuery the source of truth for the columns of BigQuery event contracts: raw column metadata comes from the live source schema, and the contract declares only what the consumer cares about. `modelgen check --introspect`, with credentials, is the CI gate for drift between contract and warehouse; without credentials it falls back to contract-only introspection with a notice. DuckDB event contracts and all produced and extract contracts are never compared with a live table.
 
-**Strict failure on missing columns.** If the contract references a column the source no longer has, generation fails with the column name. A failed build is better than a broken pipeline that nobody noticed.
+**Strict failure on missing columns.** With `--introspect`, if the contract references a column the source no longer has, generation fails with the column name. A failed build is better than a broken pipeline that nobody noticed.
 
 **BigQuery introspection only, by design.** The introspection module is BQ-native. Unless `--introspect` is passed and credentials exist, columns come from the contract (`ContractIntrospector`) for any dialect. Warehouse SQL lives behind the dialect layer (`dialect.py`), which ships BigQuery and DuckDB. A new warehouse needs a dialect, and a live-schema `Introspector` if you want it to read columns.
