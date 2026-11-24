@@ -193,16 +193,27 @@ def _rule_id(rule: dict[str, Any], ordinal: int) -> str:
     return slug(str(rule["id"])) if rule.get("id") else f"rule{ordinal}"
 
 
+def _numbered_rules(
+    obj: dict[str, Any],
+) -> list[tuple[int, tuple[dict[str, Any], str | None]]]:
+    """Each rule with its 1-based ordinal and owning column (None for the
+    object); the one numbering `map_object` and `staging_unmapped` share."""
+    props = {str(p["name"]): p for p in obj.get("properties") or []}
+    rules: list[tuple[dict[str, Any], str | None]] = [
+        (r, None) for r in obj.get("quality") or []
+    ]
+    for pname, p in props.items():
+        rules += [(r, pname) for r in p.get("quality") or []]
+    return list(enumerate(rules, start=1))
+
+
 def staging_unmapped(obj: dict[str, Any], model: str) -> list[str]:
     """`<model>.<rule>` for each rule event staging drops: every rule but
     a property's validValues, numbered as `map_object` numbers them."""
-    rules = [(r, False) for r in obj.get("quality") or []]
-    for p in obj.get("properties") or []:
-        rules += [(r, True) for r in p.get("quality") or []]
     return [
         f"{model}.{_rule_id(rule, ordinal)}"
-        for ordinal, (rule, on_property) in enumerate(rules, start=1)
-        if not (on_property and valid_values(rule) is not None)
+        for ordinal, (rule, column) in _numbered_rules(obj)
+        if not (column is not None and valid_values(rule) is not None)
     ]
 
 
@@ -222,14 +233,9 @@ def map_object(
     model = str(obj["name"])
     out = existing
     props = {str(p["name"]): p for p in obj.get("properties") or []}
-    rules: list[tuple[dict[str, Any], str | None]] = [
-        (r, None) for r in obj.get("quality") or []
-    ]
-    for pname, p in props.items():
-        rules += [(r, pname) for r in p.get("quality") or []]
 
     used: set[str] = set()
-    for ordinal, (rule, column) in enumerate(rules, start=1):
+    for ordinal, (rule, column) in _numbered_rules(obj):
         rid = _rule_id(rule, ordinal)
         label = f"{model}.{rid}"
         if not _map_rule(
