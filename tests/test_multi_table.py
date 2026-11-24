@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from modelgen.contract import ContractError, EventContract
-from modelgen.generator import Layer, generate
+from modelgen.generator import Layer, generate, mask_version
 from modelgen.introspect import ContractIntrospector
 
 HERE = Path(__file__).parent
@@ -63,7 +63,9 @@ def test_three_objects_generate_three_raw_and_three_staging(tmp_path):
     assert _files(tmp_path) == expected
     assert _files(tmp_path) == _files(GOLDEN)
     for name in expected:
-        assert (tmp_path / name).read_text() == (GOLDEN / name).read_text()
+        assert mask_version((tmp_path / name).read_text()) == mask_version(
+            (GOLDEN / name).read_text()
+        )
 
 
 def test_single_object_contract_output_unchanged(tmp_path):
@@ -73,15 +75,17 @@ def test_single_object_contract_output_unchanged(tmp_path):
         generate(events[0], ContractIntrospector(events[0]), tmp_path, layer)
     assert _files(tmp_path) == _files(SINGLE_GOLDEN)
     for name in _files(SINGLE_GOLDEN):
-        assert (tmp_path / name).read_text() == (
-            SINGLE_GOLDEN / name
-        ).read_text()
+        assert mask_version((tmp_path / name).read_text()) == mask_version(
+            (SINGLE_GOLDEN / name).read_text()
+        )
     # The single-object entry point keeps working and agrees.
     assert EventContract.from_file(SINGLE).name == events[0].name
     out = tmp_path / "cli"
     _gen_all(SINGLE, out)
     for name in _files(SINGLE_GOLDEN):
-        assert (out / name).read_text() == (SINGLE_GOLDEN / name).read_text()
+        assert mask_version((out / name).read_text()) == mask_version(
+            (SINGLE_GOLDEN / name).read_text()
+        )
 
 
 def test_table_option_limits_output(tmp_path):

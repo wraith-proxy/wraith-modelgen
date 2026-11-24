@@ -195,6 +195,7 @@ Drifted repo: a `--- <path>` header and a unified diff for each drifted file, th
 |------|---------|
 | `-c, --config FILE` | Path to `.modelgen.yml`. Default: discovered upward from cwd. |
 | `--diff` | Print a unified diff for every drifted file. |
+| `--ignore-version` | Treat a file that differs only in the modelgen version of its `GENERATED` header as in sync. |
 | `--introspect` | Query BigQuery for source columns. Off by default. |
 | `--from-contract` | The default. Kept so existing scripts keep working. |
 | `-s, --server ID` | Pick the server by its `server:` id. Applies to schema and event contracts. Extract contracts ignore it. |
@@ -620,7 +621,7 @@ The generated header changed.
 
 `<name>` is the contract name and `<ver>` is the contract version. When the contract declares no version, the ` <ver>` part is dropped. The contract path is gone, so moving a contract no longer changes its output. The header line cannot be turned off.
 
-The header embeds the modelgen version, and `modelgen check` compares bytes. Each release that changes the version string makes every committed file drift again. Plan a regeneration in every upgrade PR.
+The header embeds the modelgen version, and `modelgen check` compares bytes. Each release that changes the version string makes every committed file drift again. Run `modelgen check --ignore-version` in CI so an upgrade alone is not drift: it masks the version in the header line on both sides and still compares everything else byte for byte. Without the flag, plan a regeneration in every upgrade PR.
 
 The version comes from installed package metadata. If the distribution is not installed, for example when you run from an uninstalled source checkout, the version falls back to `0.0.0`. Files generated that way carry `modelgen 0.0.0` and will drift against a released install. There is no override flag. Do not commit output generated from an uninstalled tree.
 

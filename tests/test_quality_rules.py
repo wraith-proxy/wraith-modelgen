@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from modelgen.generator import mask_version
+
 HERE = Path(__file__).parent
 REAL = HERE / "fixtures" / "real_contracts"
 GOLDEN = HERE / "golden" / "quality_rules"
@@ -400,7 +402,9 @@ def test_goldens_match(tmp_path):
         )
         assert got == want
         for rel in got:
-            assert (out / rel).read_text() == (golden / rel).read_text()
+            assert mask_version((out / rel).read_text()) == mask_version(
+                (golden / rel).read_text()
+            )
 
 
 def test_generated_tests_deterministic(tmp_path):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -13,10 +13,16 @@ from modelgen.exit_codes import ExitCode, worst
 from modelgen.generator import (
     GenerationError,
     Layer,
+    check_destination,
     generate,
+    mask_version,
     write_generated,
 )
-from modelgen.introspect import IntrospectionError, IntrospectorChooser
+from modelgen.introspect import (
+    IntrospectionError,
+    Introspector,
+    IntrospectorChooser,
+)
 from modelgen.lint import errors as lint_errors
 from modelgen.lint import lint_contract
 
@@ -107,51 +113,44 @@ def dest_path(output: Path, filename: str, tests_output: Path | None) -> Path:
     return output / filename
 
 
-def _produced_files(
-    cfg: ModelgenConfig,
+def render_mode(
+    contract_path: Path,
+    mode: str,
+    out_dir: Path,
+    tests_output: Path | None,
+    *,
     server: str | None,
-    unmapped: list[tuple[Path, str]],
-    notices: list[tuple[Path, Issue]],
-):
-    """Yield (contract, mode, destination, content).
-
-    On a contract error the destination is the error and content is "".
-
-    Covers the produced (`schema`) and extract (`sources`) modes, for the
-    contracts whose `*_output` key is set.
-    """
+    tables: list[str] | None,
+    unmapped: list[str],
+    notices: list[Issue],
+) -> list[_Unit]:
+    """One produced (`schema`) or extract (`sources`) contract, rendered in
+    memory, one unit per file. Raises ContractError."""
     from modelgen.schema_mode import render_schema
     from modelgen.sources_mode import render_sources
 
-    for files, out_dir, mode in (
-        (cfg.schema_contract_files(), cfg.schema_output, "schema"),
-        (cfg.sources_contract_files(), cfg.sources_output, "sources"),
-    ):
-        if not files or out_dir is None:
-            continue
-        for contract_path in files:
-            found: list[Issue] = []
-            found_unmapped: list[str] = []
-            try:
-                if mode == "schema":
-                    rendered = render_schema(
-                        contract_path,
-                        server=server,
-                        unmapped=found_unmapped,
-                        notices=found,
-                    )
-                else:
-                    rendered = render_sources(
-                        contract_path, unmapped=found_unmapped, notices=found
-                    )
-            except ContractError as e:
-                yield contract_path, mode, e, ""
-                continue
-            notices.extend((contract_path, n) for n in found)
-            unmapped.extend((contract_path, r) for r in found_unmapped)
-            for filename, content in rendered.items():
-                dest = dest_path(out_dir, filename, cfg.tests_output)
-                yield contract_path, mode, dest, content
+    if mode == "schema":
+        rendered = render_schema(
+            contract_path,
+            server=server,
+            tables=tables,
+            unmapped=unmapped,
+            notices=notices,
+        )
+    else:
+        rendered = render_sources(
+            contract_path, tables=tables, unmapped=unmapped, notices=notices
+        )
+    return [
+        _Unit(
+            contract_path,
+            contract_path.name,
+            mode,
+            [(dest_path(out_dir, filename, tests_output), content)],
+            (out_dir, tests_output),
+        )
+        for filename, content in rendered.items()
+    ]
 
 
 def _package_notices(
@@ -203,6 +202,49 @@ def _installs_expectations(directory: Path) -> bool:
         "dbt_expectations" in (directory / name).read_text()
         for name in ("packages.yml", "dependencies.yml")
         if (directory / name).is_file()
+    )
+
+
+def render_event(
+    contract_path: Path,
+    label: str,
+    event: EventContract,
+    layer: Layer,
+    output_dir: Path,
+    introspector: Introspector,
+) -> _Unit | Problem:
+    """One layer of one event, rendered in memory."""
+    try:
+        result = generate(
+            contract=event,
+            introspector=introspector,
+            output_dir=output_dir,
+            layer=layer,
+            dry_run=True,
+        )
+    except (GenerationError, IntrospectionError) as e:
+        code, issue_code = failure_class(e)
+        return Problem(
+            contract_path,
+            label,
+            layer.value,
+            str(e),
+            code,
+            event=event.name,
+            code=issue_code,
+        )
+    return _Unit(
+        contract_path,
+        label,
+        layer.value,
+        [
+            (output_dir / name, content)
+            for name, content in result.artefacts.items()
+        ],
+        (output_dir,),
+        (event.name, result.new_source_columns)
+        if result.new_source_columns
+        else None,
     )
 
 
@@ -267,75 +309,60 @@ def _render(
                 layers.append((Layer.STAGING, cfg.staging_output))
 
             for layer, output_dir in layers:
-                try:
-                    result = generate(
-                        contract=event,
-                        introspector=introspector,
-                        output_dir=output_dir,
-                        layer=layer,
-                        dry_run=True,
-                    )
-                except (GenerationError, IntrospectionError) as e:
-                    code, issue_code = failure_class(e)
-                    events.items.append(
-                        Problem(
-                            contract_path,
-                            label,
-                            layer.value,
-                            str(e),
-                            code,
-                            event=event.name,
-                            code=issue_code,
-                        )
-                    )
-                    continue
-                if layer == Layer.STAGING:
+                item = render_event(
+                    contract_path,
+                    label,
+                    event,
+                    layer,
+                    output_dir,
+                    introspector,
+                )
+                if isinstance(item, _Unit) and layer == Layer.STAGING:
                     events.unmapped.extend(
                         (contract_path, r) for r in event.unmapped_rules
                     )
-                events.items.append(
-                    _Unit(
-                        contract_path,
-                        label,
-                        layer.value,
-                        [
-                            (output_dir / name, content)
-                            for name, content in result.artefacts.items()
-                        ],
-                        (output_dir,),
-                        (event.name, result.new_source_columns)
-                        if result.new_source_columns
-                        else None,
-                    )
-                )
+                events.items.append(item)
 
     produced = _Rendered()
-    for contract_path, mode, dest, content in _produced_files(
-        cfg, server, produced.unmapped, produced.notices
+    for files, out_dir, mode in (
+        (cfg.schema_contract_files(), cfg.schema_output, "schema"),
+        (cfg.sources_contract_files(), cfg.sources_output, "sources"),
     ):
-        if contract_path not in produced.contracts:
-            produced.contracts.append(contract_path)
-        if isinstance(dest, ContractError):
-            produced.items.append(
-                Problem(
-                    contract_path,
-                    contract_path.name,
-                    "parse",
-                    str(dest),
-                    ExitCode.INVALID,
-                    tuple(dest.issues),
-                )
-            )
+        if not files or out_dir is None:
             continue
-        produced.items.append(
-            _Unit(
-                contract_path,
-                contract_path.name,
-                mode,
-                [(dest, content)],
-                (cfg.schema_output, cfg.sources_output, cfg.tests_output),
+        for contract_path in files:
+            if contract_path not in produced.contracts:
+                produced.contracts.append(contract_path)
+            found: list[Issue] = []
+            found_unmapped: list[str] = []
+            try:
+                units = render_mode(
+                    contract_path,
+                    mode,
+                    out_dir,
+                    cfg.tests_output,
+                    server=server,
+                    tables=None,
+                    unmapped=found_unmapped,
+                    notices=found,
+                )
+            except ContractError as e:
+                produced.items.append(
+                    Problem(
+                        contract_path,
+                        contract_path.name,
+                        "parse",
+                        str(e),
+                        ExitCode.INVALID,
+                        tuple(e.issues),
+                    )
+                )
+                continue
+            produced.notices.extend((contract_path, n) for n in found)
+            produced.unmapped.extend(
+                (contract_path, r) for r in found_unmapped
             )
-        )
+            produced.items.extend(units)
 
     first, second = (
         (produced, events) if produced_first else (events, produced)
@@ -380,9 +407,46 @@ def run_project(
         notify=notify,
         produced_first=False,
     )
-    result = _empty_result(rendered)
+    return write_units(
+        rendered.items, _empty_result(rendered), dry_run=dry_run
+    )
+
+
+def _refused(unit: _Unit, e: GenerationError) -> Problem:
+    return Problem(
+        unit.contract,
+        unit.label,
+        unit.layer,
+        str(e),
+        ExitCode.INVALID,
+        code="generation",
+    )
+
+
+def write_units(
+    items: Sequence[_Unit | Problem],
+    result: ProjectResult,
+    *,
+    dry_run: bool,
+    atomic: bool = False,
+) -> ProjectResult:
+    """Write each unit unless dry_run and record the outcomes in `result`.
+
+    A refused unit is a problem and the rest are still written, unless
+    `atomic`: then every destination is checked first and one refusal
+    writes nothing.
+    """
+    if atomic and not dry_run:
+        for item in items:
+            if isinstance(item, _Unit):
+                try:
+                    for dest, _ in item.files:
+                        check_destination(dest, *item.roots)
+                except GenerationError as e:
+                    result.problems.append(_refused(item, e))
+                    return result
     status = FileStatus.DRY_RUN if dry_run else FileStatus.WRITTEN
-    for item in rendered.items:
+    for item in items:
         if isinstance(item, Problem):
             result.problems.append(item)
             continue
@@ -391,16 +455,7 @@ def run_project(
                 for dest, content in item.files:
                     write_generated(dest, content, *item.roots)
             except GenerationError as e:
-                result.problems.append(
-                    Problem(
-                        item.contract,
-                        item.label,
-                        item.layer,
-                        str(e),
-                        ExitCode.INVALID,
-                        code="generation",
-                    )
-                )
+                result.problems.append(_refused(item, e))
                 continue
         result.files.extend(
             FileOutcome(item.contract, item.layer, dest, content, status)
@@ -417,8 +472,13 @@ def check_project(
     server: str | None,
     from_contract: bool,
     notify: Callable[[str], None],
+    ignore_version: bool = False,
 ) -> ProjectResult:
-    """Compare every file .modelgen.yml names against what is on disk."""
+    """Compare every file .modelgen.yml names against what is on disk.
+
+    With `ignore_version`, a file that differs only in the modelgen
+    version of its header is in sync.
+    """
     rendered = _render(
         cfg,
         server=server,
@@ -436,7 +496,10 @@ def check_project(
             on_disk = dest.read_text() if dest.exists() else None
             if on_disk is None:
                 status = FileStatus.MISSING
-            elif on_disk == content:
+            elif on_disk == content or (
+                ignore_version
+                and mask_version(on_disk) == mask_version(content)
+            ):
                 status, on_disk = FileStatus.IN_SYNC, None
             else:
                 status = FileStatus.DRIFT

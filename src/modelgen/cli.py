@@ -25,11 +25,7 @@ from modelgen.contract import (
 )
 from modelgen.exit_codes import ExitCode
 from modelgen.generator import (
-    GenerationError,
-    GenerationResult,
     Layer,
-    generate,
-    write_generated,
 )
 from modelgen.introspect import IntrospectionError
 from modelgen.lint import Finding, lint_contract
@@ -40,9 +36,10 @@ from modelgen.project import (
     Problem,
     ProjectResult,
     check_project,
-    dest_path,
-    failure_class,
+    render_event,
+    render_mode,
     run_project,
+    write_units,
 )
 from modelgen.report import (
     build_report,
@@ -211,6 +208,17 @@ def _print_unmapped(rules: list[str]) -> None:
         f" {', '.join(rules)}",
         err=True,
     )
+
+
+def _report_unmapped(
+    contract: Path,
+    rules: list[str],
+    issues: list[dict],
+    severity: str = "warning",
+) -> None:
+    if rules:
+        _print_unmapped(rules)
+        issues.extend(unmapped_issues(contract, rules, severity))
 
 
 def _notify(message: str) -> None:
@@ -445,7 +453,19 @@ def gen(
         else "contract-only introspection"
     )
 
-    results: list[tuple[EventContract, GenerationResult]] = []
+    def failed(p: Problem) -> None:
+        err_console.print(
+            f"[red]Generation failed ({p.label}):[/red] {p.message}"
+        )
+        err_console.print(
+            "[dim]Fix the contract or the source. Then try again.[/dim]"
+        )
+        issues.append(
+            plain_issue(contract, p.code, p.message, object_name=p.label)
+        )
+        finish(p.exit_code)
+
+    units = []
     for event in events:
         introspector = chooser.for_event(event)
 
@@ -474,75 +494,50 @@ def gen(
                 )
             )
 
-        try:
-            result = generate(
-                contract=event,
-                introspector=introspector,
-                output_dir=output,
-                layer=layer,
-                dry_run=dry_run,
-            )
-        except (GenerationError, IntrospectionError) as e:
-            err_console.print(
-                f"[red]Generation failed ({event.name}):[/red] {e}"
-            )
-            err_console.print(
-                "[dim]Fix the contract or the source. Then try again.[/dim]"
-            )
-            exit_code, issue_code = failure_class(e)
-            issues.append(
-                plain_issue(
-                    contract, issue_code, str(e), object_name=event.name
-                )
-            )
-            finish(exit_code)
-        results.append((event, result))
+        item = render_event(
+            contract, event.name, event, layer, output, introspector
+        )
+        if isinstance(item, Problem):
+            failed(item)
+        units.append(item)
+
+    result = write_units(
+        units, ProjectResult([], [], [], [], []), dry_run=dry_run, atomic=True
+    )
+    if result.problems:
+        failed(result.problems[0])
 
     table_out = Table(show_header=True, header_style="bold cyan")
     table_out.add_column("File")
     table_out.add_column("Status")
-    for _, result in results:
-        for path, content in zip(
-            result.written, result.artefacts.values(), strict=True
-        ):
-            status = (
-                "[yellow]dry-run[/yellow]"
-                if dry_run
-                else "[green]written[/green]"
-            )
-            table_out.add_row(str(path), status)
-            entries.append(
-                file_entry(
-                    path,
-                    layer.value,
-                    content,
-                    "dry_run" if dry_run else "written",
-                )
-            )
+    for f in result.files:
+        status = (
+            "[yellow]dry-run[/yellow]" if dry_run else "[green]written[/green]"
+        )
+        table_out.add_row(str(f.path), status)
+        entries.append(file_entry(f.path, f.layer, f.content, f.status.value))
     if not as_json:
         console.print(table_out)
     if layer == Layer.STAGING:
-        unmapped = [r for event, _ in results for r in event.unmapped_rules]
-        if unmapped:
-            _print_unmapped(unmapped)
-            issues.extend(unmapped_issues(contract, unmapped))
+        _report_unmapped(
+            contract, [r for e in events for r in e.unmapped_rules], issues
+        )
 
-    for event, result in results:
-        if result.new_source_columns:
-            err_console.print(
-                Panel(
-                    f"[bold]{event.name}:"
-                    f" {len(result.new_source_columns)} new source"
-                    " column(s) not yet in staging:[/bold]\n"
-                    f"  [cyan]{', '.join(result.new_source_columns)}"
-                    "[/cyan]\n\n"
-                    "[dim]Flowing through raw automatically."
-                    " Add to the staging contract when consumers need"
-                    " them.[/dim]",
-                    title="[yellow]⚠ Schema evolution detected[/yellow]",
-                    border_style="yellow",
-                )
+    for event_name, cols in result.new_source_columns:
+        err_console.print(
+            Panel(
+                f"[bold]{event_name}:"
+                f" {len(cols)} new source"
+                " column(s) not yet in staging:[/bold]\n"
+                f"  [cyan]{', '.join(cols)}"
+                "[/cyan]\n\n"
+                "[dim]Flowing through raw automatically."
+                " Add to the staging contract when consumers need"
+                " them.[/dim]",
+                title="[yellow]⚠ Schema evolution detected[/yellow]",
+                border_style="yellow",
             )
+        )
     finish(ExitCode.OK)
 
 
@@ -608,9 +603,6 @@ def _write_schema(
     tests_output: Path | None = None,
     as_json: bool = False,
 ) -> None:
-    from modelgen.schema_mode import render_schema
-    from modelgen.sources_mode import render_sources
-
     layer = "sources" if sources else "schema"
     issues: list[dict] = []
     entries: list[dict] = []
@@ -621,46 +613,38 @@ def _write_schema(
     unmapped: list[str] = []
     notices: list[Issue] = []
     try:
-        if sources:
-            files = render_sources(
-                contract, tables=table, unmapped=unmapped, notices=notices
-            )
-        else:
-            files = render_schema(
-                contract,
-                server=server,
-                tables=table,
-                unmapped=unmapped,
-                notices=notices,
-            )
+        units = render_mode(
+            contract,
+            layer,
+            output,
+            tests_output,
+            server=server,
+            tables=table,
+            unmapped=unmapped,
+            notices=notices,
+        )
     except ContractError as e:
         _contract_invalid(command, contract, e, issues, entries, as_json)
     _print_notices(notices)
     issues.extend(contract_issue(contract, i) for i in notices)
-    status = "dry_run" if dry_run else "written"
-    for filename, content in files.items():
-        dest = dest_path(output, filename, tests_output)
-        if not dry_run:
-            try:
-                write_generated(dest, content, output, tests_output)
-            except GenerationError as e:
-                err_console.print(f"[red]{escape(str(e))}[/red]")
-                issues.append(plain_issue(contract, "generation", str(e)))
-                finish(ExitCode.INVALID)
-        entries.append(file_entry(dest, layer, content, status))
+    result = write_units(
+        units, ProjectResult([], [], [], [], []), dry_run=dry_run, atomic=True
+    )
+    if result.problems:
+        message = result.problems[0].message
+        err_console.print(f"[red]{escape(message)}[/red]")
+        issues.append(plain_issue(contract, "generation", message))
+        finish(ExitCode.INVALID)
+    for f in result.files:
+        entries.append(file_entry(f.path, f.layer, f.content, f.status.value))
         if not as_json:
             label = "dry-run" if dry_run else "written"
-            console.print(f"{escape(str(dest))} {label}", highlight=False)
-    if unmapped:
-        _print_unmapped(unmapped)
-        failed = strict
-        issues.extend(
-            unmapped_issues(
-                contract, unmapped, "error" if failed else "warning"
-            )
-        )
-        if failed:
-            finish(ExitCode.LINT)
+            console.print(f"{escape(str(f.path))} {label}", highlight=False)
+    _report_unmapped(
+        contract, unmapped, issues, "error" if strict else "warning"
+    )
+    if unmapped and strict:
+        finish(ExitCode.LINT)
     finish(ExitCode.OK)
 
 
@@ -1018,6 +1002,15 @@ def check(
             " --format json."
         ),
     ),
+    ignore_version: bool = typer.Option(
+        False,
+        "--ignore-version",
+        help=(
+            "Treat a file that differs only in the modelgen version of its"
+            " GENERATED header as in sync, so a modelgen upgrade alone is"
+            " not drift."
+        ),
+    ),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Enable debug logging."
     ),
@@ -1073,7 +1066,11 @@ def check(
         _stop("check", ExitCode.OK, output_format, cfg)
 
     result = check_project(
-        cfg, server=server, from_contract=from_contract, notify=_notify
+        cfg,
+        server=server,
+        from_contract=from_contract,
+        notify=_notify,
+        ignore_version=ignore_version,
     )
 
     _print_notices(n for _, n in result.notices)

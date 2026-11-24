@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from modelgen.generator import mask_version
+
 HERE = Path(__file__).parent
 REAL = HERE / "fixtures" / "real_contracts"
 GOLDEN = HERE / "golden" / "schema_mode"
@@ -175,7 +177,9 @@ def test_goldens_match(name, tmp_path):
     for p in golden.rglob("*"):
         if p.is_file():
             rel = p.relative_to(golden)
-            assert (tmp_path / rel).read_text() == p.read_text()
+            assert mask_version((tmp_path / rel).read_text()) == (
+                mask_version(p.read_text())
+            )
 
 
 def test_header_has_no_paths_or_timestamps(tmp_path):

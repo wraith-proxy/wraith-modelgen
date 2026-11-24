@@ -66,7 +66,7 @@ Generates every file a `ModelgenConfig` names and returns a `ProjectResult`. Fil
 
 ### check_project
 
-Compares every file a `ModelgenConfig` names with what is on disk, without writing, and returns a `ProjectResult`. Each file's status is `in_sync`, `drift` (with the text found in `on_disk`) or `missing`.
+Compares every file a `ModelgenConfig` names with what is on disk, without writing, and returns a `ProjectResult`. Each file's status is `in_sync`, `drift` (with the text found in `on_disk`) or `missing`. With `ignore_version=True`, a file that differs only in the modelgen version of its header is `in_sync`.
 
 ### ProjectResult
 
