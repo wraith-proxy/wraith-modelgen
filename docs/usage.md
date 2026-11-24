@@ -229,9 +229,8 @@ modelgen gen contracts/bus-marts.odcs.yaml --layer schema -o models/marts
 
 Write one `_<contract-name>__models.yml` for tables the project produces.
 Quality rules that map to dbt tests land under `tests/generated/` inside
-the output directory (or `--tests-output`, below). A property-level
-`rule: validValues` is not mapped here; it is reported as unmapped and
-becomes `accepted_values` only in the staging yml.
+the output directory (or `--tests-output`, below). A `validValues` rule,
+in either form, becomes an `accepted_values` test in the yml instead.
 
 ```bash
 modelgen schema contracts/bus-marts.odcs.yaml -o models/marts --strict

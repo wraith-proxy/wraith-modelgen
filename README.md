@@ -141,7 +141,7 @@ Gotchas:
 
 ### `schema`
 
-Writes one `_<contract-name>__models.yml` for tables the project produces. Quality rules that map to dbt tests land under `tests/generated/` inside the output directory. A property-level `rule: validValues` is not one of them. It is reported as unmapped here and becomes `accepted_values` only in the staging yml.
+Writes one `_<contract-name>__models.yml` for tables the project produces. Quality rules that map to dbt tests land under `tests/generated/` inside the output directory. A `validValues` rule, in either form, becomes an `accepted_values` test in the yml instead.
 
 ```bash
 modelgen schema contracts/bus-marts.odcs.yaml -o models/marts --strict
@@ -316,9 +316,11 @@ schema:
 |---|---|
 | `not_null` | property `required: true` |
 | `unique` | property `unique: true` |
-| `accepted_values` | property `quality` with `rule: validValues` + `validValues: [...]`. Staging yml only. |
+| `accepted_values` | property `quality` with `rule: validValues` + `validValues: [...]` (property form), or `type: library`, `metric: invalidValues`, `arguments.validValues` and `mustBe: 0` (library form). Every mode. |
 
-`modelgen schema` and `modelgen sources` do not read that form. They report it as unmapped, so `--strict` exits 3 for it. Those layers map the ODCS library form instead: `type: library`, `metric: invalidValues`, `arguments.validValues` and `mustBe: 0`. `gen --staging` ignores the library form. A list that must reach both layers has to be written in both forms, and `schema --strict` fails on the `rule: validValues` one.
+Write the list once, in either form: `gen --staging`, `modelgen schema` and `modelgen sources` all map both forms to `accepted_values`, and both forms on one column yield one test. The property form is valid ODCS only under `apiVersion: v3.0.2`, which also needs a `rule` key on a library-form rule. v3.1.0 and later accept only the library form.
+
+Staging renders `accepted_values` with no `where`, while `schema` and `sources` add `where: <column> is not null` on a column that is neither required nor a primary key. The difference is deliberate.
 
 ### Supported ODCS versions
 
@@ -650,7 +652,8 @@ Clean output ends with `Everything in sync. <n> file(s) match their contracts.` 
 ### Upgrade notes
 
 - Output is byte-identical for the same inputs. No timestamps, no paths. That is tested for `gen --raw` and `gen --staging` with `--from-contract`. The BigQuery path is not covered by that test.
-- ODCS quality rules are mapped per mode. `schema` and `sources` (and `gen --layer schema|sources`) map them through `src/modelgen/quality.py`: `invalidValues` with `arguments.validValues` and `mustBe: 0` becomes `accepted_values`, zero `nullValues` and `duplicateValues` become `not_null` and `unique`, and `rowCount` with a bound becomes a row-count test. Other thresholds and `type: sql` rules become singular tests under `tests/generated/`. Anything unmapped is reported, never dropped. `gen --staging` maps only property-level `rule: validValues` to `accepted_values` (`src/modelgen/contract.py`) and reports nothing it skips. `gen --raw` emits no quality tests. Review the generated tests after regeneration.
+- ODCS quality rules are mapped per mode. `schema` and `sources` (and `gen --layer schema|sources`) map them through `src/modelgen/quality.py`: `validValues`, in either form, becomes `accepted_values`, zero `nullValues` and `duplicateValues` become `not_null` and `unique`, and `rowCount` with a bound becomes a row-count test. Other thresholds and `type: sql` rules become singular tests under `tests/generated/`. Anything unmapped is reported, never dropped. `gen --staging` maps only `validValues`, in either form, to `accepted_values` (`src/modelgen/contract.py`) and reports nothing it skips. `gen --raw` emits no quality tests. Review the generated tests after regeneration.
+- Both `validValues` forms now map to `accepted_values` in every mode. Contracts that used the form a mode used to ignore (the library form under `gen --staging`, the property form under `schema` and `sources`) now gain `accepted_values` tests, which may fail on existing data. `schema --strict` and `sources --strict` no longer exit 3 on the property form.
 - `modelgen check` also checks the schema and sources layers when their config keys are set.
 - Several schema objects per contract: `gen` writes one model per object, in contract order. Check model names if a contract has several objects.
 - Pin `--server` if a contract lists several servers. Without it, the first `type: bigquery` server wins, then the first server of a supported type.
