@@ -630,12 +630,13 @@ def _write_schema(
     result = write_units(
         units, ProjectResult([], [], [], [], []), dry_run=dry_run, atomic=True
     )
-    for p in result.problems:
-        err_console.print(f"[red]{escape(p.message)}[/red]")
-        issues.append(plain_issue(contract, "generation", p.message))
+    if result.problems:
+        message = result.problems[0].message
+        err_console.print(f"[red]{escape(message)}[/red]")
+        issues.append(plain_issue(contract, "generation", message))
         finish(ExitCode.INVALID)
     for f in result.files:
-        entries.append(file_entry(f.path, layer, f.content, f.status.value))
+        entries.append(file_entry(f.path, f.layer, f.content, f.status.value))
         if not as_json:
             label = "dry-run" if dry_run else "written"
             console.print(f"{escape(str(f.path))} {label}", highlight=False)
