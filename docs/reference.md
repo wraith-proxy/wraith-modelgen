@@ -96,7 +96,7 @@ For `bigquery`, add `project` (GCP project ID) and `dataset`. Keys for the other
 | `primaryKey` / `primaryKeyPosition` | no | Marks a `unique_key` column (uses source names, ordered by position) |
 | `required` | no | → `not_null` test |
 | `unique` | no | → `unique` test |
-| `quality` | no | `rule: validValues` + `validValues: [...]` → `accepted_values` test in the staging yml only. See [Quality-rule mapping](#quality-rule-mapping) |
+| `quality` | no | `rule: validValues` + `validValues: [...]`, or the library form, → `accepted_values` test in every mode. See [Quality-rule mapping](#quality-rule-mapping) |
 | `classification` | no | `pii` or `psi` → the column is **encrypted** into staging and emitted as `BYTES`. BigQuery only: DuckDB generation refuses classified columns. See [Keystore & Erasure](bigquery/keystore.md) |
 | `customProperties` | no | `modelgenExempt`, lint exemptions scoped to this column only. See [Lint Rules](linting.md#exemptions) |
 
@@ -251,21 +251,35 @@ contracts require `modelgenLoadedAtField`, extract contracts do not carry it.
 
 Quality rules map per layer.
 
-- `schema` and `sources` (and `gen --layer schema|sources`) map the ODCS
+- Every mode maps `validValues` to `accepted_values`, in either form: the
+  property form (`rule: validValues`, `validValues: [...]`) or the ODCS
   library form (`type: library`, `metric: invalidValues`,
-  `arguments.validValues`, `mustBe: 0`) to `accepted_values`; zero
-  `nullValues` and `duplicateValues` to `not_null` and `unique`; `rowCount`
-  with a bound to a row-count test. Other thresholds and `type: sql` rules
-  become singular tests under `tests/generated/`. Anything unmapped is
-  reported on stderr, never dropped, and `--strict` exits 3 for it.
-- `gen --staging` maps only property-level `rule: validValues` to
-  `accepted_values` and reports nothing it skips. `gen --raw` emits no
-  quality tests.
+  `arguments.validValues`, `mustBe: 0`). Both forms on one column yield one
+  test. The property form is valid ODCS only under `apiVersion: v3.0.2`,
+  which also needs a `rule` key on a library-form rule.
+- `schema` and `sources` (and `gen --layer schema|sources`) also map zero
+  `nullValues` and `duplicateValues` to `not_null` and `unique`, and
+  `rowCount` with a bound to a row-count test. Other thresholds and
+  `type: sql` rules become singular tests under `tests/generated/`.
+  Anything unmapped is reported on stderr, never dropped, and `--strict`
+  exits 3 for it.
+- `gen --staging` maps only `validValues` and reports nothing it skips.
+  `gen --raw` emits no quality tests.
 
-A list that must reach both layers has to be written in both forms, and
-`schema --strict` fails on the `rule: validValues` one. Generated quality
-tests call `dbt_expectations.*` macros; modelgen does not check the package is
-installed.
+Staging renders `accepted_values` with no `where`; `schema` and `sources`
+add `where: <column> is not null` on a column that is neither required nor
+a primary key. The difference is deliberate.
+
+Generated quality tests call `dbt_expectations.*` macros. `run` and `check`
+warn once when the rendered output calls one and the dbt project does not
+install the package. They look for `dbt_project.yml` from each output
+directory up to the directory holding `.modelgen.yml`, never above it. The
+package counts as installed when `packages.yml` or `dependencies.yml` beside
+it contains `dbt_expectations` (any publisher, a fork too) or
+`dbt_packages/dbt_expectations` exists. The match is a substring, so a
+commented-out entry counts. No `dbt_project.yml` found means no warning.
+The warning does not change the exit code. `gen`, `schema` and `sources` do
+not check.
 
 ---
 

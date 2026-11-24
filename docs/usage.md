@@ -96,9 +96,9 @@ Each issue has:
 
 | Field | Meaning |
 |---|---|
-| `source` | The contract path. For a malformed `.modelgen.yml`, the config path. |
+| `source` | The contract path. For a malformed `.modelgen.yml`, the config path. For `dbt-package-missing`, the `dbt_project.yml` path. |
 | `object` | The schema object (event) name when known, else `null`. For `quality-rule-unmapped` it is the rule, as `<model>.<rule>`. |
-| `code` | A lint rule code (see [linting](linting.md)), or one of: `schema.<keyword>`, `yaml`, `limit`, `odcs-version` or `contract` (a contract or `.modelgen.yml` that could not be read); `odcs-version-deprecated` (a warning, see [compatibility](compatibility.md)); `quality-rule-unmapped` (a quality rule with no dbt test; an error under `--strict`); `generation` (a model could not be generated); `introspection` (a source table could not be introspected); `internal` (an unexpected error, exit `6`). |
+| `code` | A lint rule code (see [linting](linting.md)), or one of: `schema.<keyword>`, `yaml`, `limit`, `odcs-version` or `contract` (a contract or `.modelgen.yml` that could not be read); `odcs-version-deprecated` (a warning, see [compatibility](compatibility.md)); `quality-rule-unmapped` (a quality rule with no dbt test; an error under `--strict`); `generation` (a model could not be generated); `introspection` (a source table could not be introspected); `internal` (an unexpected error, exit `6`); `dbt-package-missing` (a warning from `run` and `check`: the dbt project does not install `dbt_expectations`, which the generated tests call). |
 | `severity` | `error` or `warning`. |
 | `message` | The human-readable message. |
 | `pointer` | JSON pointer into the contract (`""` is the document root), or `null`. |
@@ -229,9 +229,8 @@ modelgen gen contracts/bus-marts.odcs.yaml --layer schema -o models/marts
 
 Write one `_<contract-name>__models.yml` for tables the project produces.
 Quality rules that map to dbt tests land under `tests/generated/` inside
-the output directory (or `--tests-output`, below). A property-level
-`rule: validValues` is not mapped here; it is reported as unmapped and
-becomes `accepted_values` only in the staging yml.
+the output directory (or `--tests-output`, below). A `validValues` rule,
+in either form, becomes an `accepted_values` test in the yml instead.
 
 ```bash
 modelgen schema contracts/bus-marts.odcs.yaml -o models/marts --strict
@@ -347,8 +346,11 @@ failures the precedence above applies.
 ## Configuration: `.modelgen.yml`
 
 `run` and `check` read it; `gen`, `schema`, `sources` and `validate` never do.
-Paths are relative to the file. Unknown keys are ignored with a warning that
-names the nearest valid key. Config warnings go to stderr and, with
+Paths are relative to the file. Every key takes a string: any other value,
+such as `contracts: false`, is a config error (exit `1`) that names the key
+and the type it got (`'contracts' must be a string, got bool`). A key set to
+null counts as absent, so its default applies. Unknown keys are ignored with
+a warning that names the nearest valid key. Config warnings go to stderr and, with
 `--format json`, into `issues` with `severity: warning`. They do not change
 the exit code.
 

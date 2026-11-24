@@ -24,7 +24,7 @@ its BigQuery/dbt specifics in ODCS `customProperties`:
     property.primaryKey      -> contributes to unique_key (source names)
     property.required        -> not_null test
     property.unique          -> unique test
-    property.logicalTypeOptions.validValues -> accepted_values test
+    property.quality validValues -> accepted_values test (either form)
     property.classification  -> pii/psi; drives encryption in staging
     property.customProperties -> modelgenExempt (column-scoped)
   schema[].customProperties  -> modelgenLoadedAtField, modelgenSubjectField,
@@ -63,6 +63,7 @@ from modelgen.dialect import (
     supported_server_types,
 )
 from modelgen.errors import ModelgenError
+from modelgen.quality import valid_values
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -316,13 +317,11 @@ class StagingColumn:
         if prop.get("unique"):
             tests.append(ColumnTest("unique"))
         for check in prop.get("quality") or []:
-            if check.get("rule") == "validValues" and "validValues" in check:
-                tests.append(
-                    ColumnTest(
-                        "accepted_values",
-                        {"values": check["validValues"]},
-                    )
-                )
+            values = valid_values(check)
+            if values is not None:
+                test = ColumnTest("accepted_values", {"values": values})
+                if test not in tests:
+                    tests.append(test)
         return cls(
             source=source,
             name=name or source.lower(),

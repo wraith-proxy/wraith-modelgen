@@ -6,8 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).parent
 REAL = HERE / "fixtures" / "real_contracts"
+EXAMPLE = HERE.parent / "contracts" / "example_contract.yml"
 _RUNNER = "from modelgen.cli import main; main()"
 SOURCES_YML = "_wraith_bus_extract_positions__sources.yml"
 ROW_COUNT = "bus_positions__extract_row_count.sql"
@@ -236,3 +239,144 @@ def test_config_warning_survives_a_pattern_that_matches_nothing(tmp_path):
         "error",
         "warning",
     ]
+
+
+def test_non_string_config_value_exits_1_naming_key_and_type(tmp_path):
+    (tmp_path / ".modelgen.yml").write_text(
+        "contracts: false\ncontract: typo\n"
+    )
+    for command in ("run", "check"):
+        text = _cli(command, cwd=tmp_path, check=False)
+        assert text.returncode == 1
+        assert "'contracts' must be a string, got bool" in text.stderr
+        assert "unknown key" not in text.stderr
+        res = _cli(command, "--format", "json", cwd=tmp_path, check=False)
+        assert res.returncode == 1
+        [issue] = json.loads(res.stdout)["issues"]
+        assert issue["severity"] == "error"
+        assert "'contracts' must be a string, got bool" in issue["message"]
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "contracts",
+        "raw_output",
+        "staging_output",
+        "schema_contracts",
+        "schema_output",
+        "sources_contracts",
+        "sources_output",
+        "tests_output",
+    ],
+)
+@pytest.mark.parametrize(
+    ("value", "type_name"),
+    [("true", "bool"), ("5", "int"), ("[a, b]", "list"), ("{a: b}", "dict")],
+)
+def test_every_known_key_rejects_non_string_values(
+    tmp_path, key, value, type_name
+):
+    (tmp_path / ".modelgen.yml").write_text(f"{key}: {value}\n")
+    res = _cli("check", cwd=tmp_path, check=False)
+    assert res.returncode == 1
+    assert f"'{key}' must be a string, got {type_name}" in res.stderr
+
+
+def test_null_config_values_count_as_absent(tmp_path):
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "contracts" / "c.yml").write_text(EXAMPLE.read_text())
+    (tmp_path / ".modelgen.yml").write_text(
+        "contracts:\n"
+        "raw_output: null\n"
+        "staging_output: ~\n"
+        "schema_contracts:\n"
+        "schema_output:\n"
+        "sources_contracts:\n"
+        "sources_output:\n"
+        "tests_output:\n"
+    )
+    res = _cli("run", cwd=tmp_path)
+    assert res.stderr == ""
+    assert list((tmp_path / "models" / "raw").glob("raw__*.sql"))
+    assert list((tmp_path / "models" / "staging").glob("stg__*.sql"))
+
+
+MISSING_PACKAGE = "does not install dbt_expectations"
+
+
+def _dbt_project(tmp_path: Path) -> Path:
+    proj = _project(
+        tmp_path,
+        "bus-positions-extract",
+        "sources_contracts: contracts/*.odcs.yaml\n"
+        "sources_output: models/staging\n",
+    )
+    (proj / "dbt_project.yml").write_text("name: bus\n")
+    return proj
+
+
+def test_missing_dbt_expectations_warns_once_and_keeps_exit_codes(tmp_path):
+    proj = _dbt_project(tmp_path)
+    assert _cli("run", cwd=proj).stderr.count(MISSING_PACKAGE) == 1
+    result = _cli("check", "--format", "json", cwd=proj)
+    assert result.stderr.count(MISSING_PACKAGE) == 1
+    report = json.loads(result.stdout)
+    assert report["ok"] is True
+    assert [
+        i["severity"]
+        for i in report["issues"]
+        if MISSING_PACKAGE in i["message"]
+    ] == ["warning"]
+
+
+def test_no_dbt_project_at_or_below_the_config_dir_stays_silent(tmp_path):
+    proj = tmp_path / "repo"
+    proj.mkdir()
+    _dbt_project(proj)
+    assert MISSING_PACKAGE in _cli("run", cwd=proj).stderr
+    (proj / "dbt_project.yml").rename(tmp_path / "dbt_project.yml")
+    assert MISSING_PACKAGE not in _cli("run", cwd=proj).stderr
+
+
+@pytest.mark.parametrize(
+    "path, content",
+    [
+        (
+            "packages.yml",
+            "packages:\n  - package: metaplane/dbt_expectations\n"
+            '    version: [">=0.10.0", "<0.11.0"]\n',
+        ),
+        (
+            "dependencies.yml",
+            "packages:\n"
+            "  - git: https://example.com/fork/dbt_expectations.git\n",
+        ),
+        (
+            "dbt_packages/dbt_expectations/dbt_project.yml",
+            "name: dbt_expectations\n",
+        ),
+    ],
+    ids=["packages", "dependencies", "vendored"],
+)
+def test_installed_dbt_expectations_stays_silent(tmp_path, path, content):
+    proj = _dbt_project(tmp_path)
+    assert MISSING_PACKAGE in _cli("run", cwd=proj).stderr
+    (proj / path).parent.mkdir(parents=True, exist_ok=True)
+    (proj / path).write_text(content)
+    assert MISSING_PACKAGE not in _cli("run", cwd=proj).stderr
+
+
+def test_output_without_dbt_expectations_stays_silent(tmp_path):
+    proj = _dbt_project(tmp_path)
+    assert MISSING_PACKAGE in _cli("run", cwd=proj).stderr
+    contract = proj / "contracts" / "c.odcs.yaml"
+    contract.write_text(
+        contract.read_text().replace(
+            "customProperties:\n",
+            "customProperties:\n  - property: dbtColumnSetTest\n"
+            "    value: columns_match_set\n",
+            1,
+        )
+    )
+    assert MISSING_PACKAGE not in _cli("run", cwd=proj).stderr
