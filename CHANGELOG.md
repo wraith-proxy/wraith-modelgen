@@ -8,6 +8,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Initial commit. Ghost Stack project scaffold. Nothing generated yet.
 
+## v0.20.0 (2026-11-24)
+
+### Bug Fixes
+
+- tidy the schema and sources refusal path' (#45) from feature/TJP-21111 into main
+- tidy the schema and sources refusal path
+- report unmapped rules through one helper
+- schema and sources write every file or none
+- gen renders every table before writing any
+- point the usage upgrade notes at check --ignore-version
+- restamp goldens and example models to 0.19.0
+
+### Features
+
+- add check --ignore-version so a release is not drift
+
 ## v0.19.0 (2026-11-24)
 
 ### Bug Fixes
