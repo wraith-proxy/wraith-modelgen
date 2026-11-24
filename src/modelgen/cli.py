@@ -25,9 +25,7 @@ from modelgen.contract import (
 )
 from modelgen.exit_codes import ExitCode
 from modelgen.generator import (
-    GenerationError,
     Layer,
-    write_generated,
 )
 from modelgen.introspect import IntrospectionError
 from modelgen.lint import Finding, lint_contract
@@ -38,8 +36,8 @@ from modelgen.project import (
     Problem,
     ProjectResult,
     check_project,
-    dest_path,
     render_event,
+    render_mode,
     run_project,
     write_units,
 )
@@ -595,9 +593,6 @@ def _write_schema(
     tests_output: Path | None = None,
     as_json: bool = False,
 ) -> None:
-    from modelgen.schema_mode import render_schema
-    from modelgen.sources_mode import render_sources
-
     layer = "sources" if sources else "schema"
     issues: list[dict] = []
     entries: list[dict] = []
@@ -608,36 +603,32 @@ def _write_schema(
     unmapped: list[str] = []
     notices: list[Issue] = []
     try:
-        if sources:
-            files = render_sources(
-                contract, tables=table, unmapped=unmapped, notices=notices
-            )
-        else:
-            files = render_schema(
-                contract,
-                server=server,
-                tables=table,
-                unmapped=unmapped,
-                notices=notices,
-            )
+        units = render_mode(
+            contract,
+            layer,
+            output,
+            tests_output,
+            server=server,
+            tables=table,
+            unmapped=unmapped,
+            notices=notices,
+        )
     except ContractError as e:
         _contract_invalid(command, contract, e, issues, entries, as_json)
     _print_notices(notices)
     issues.extend(contract_issue(contract, i) for i in notices)
-    status = "dry_run" if dry_run else "written"
-    for filename, content in files.items():
-        dest = dest_path(output, filename, tests_output)
-        if not dry_run:
-            try:
-                write_generated(dest, content, output, tests_output)
-            except GenerationError as e:
-                err_console.print(f"[red]{escape(str(e))}[/red]")
-                issues.append(plain_issue(contract, "generation", str(e)))
-                finish(ExitCode.INVALID)
-        entries.append(file_entry(dest, layer, content, status))
+    result = write_units(
+        units, ProjectResult([], [], [], [], []), dry_run=dry_run, atomic=True
+    )
+    for p in result.problems:
+        err_console.print(f"[red]{escape(p.message)}[/red]")
+        issues.append(plain_issue(contract, "generation", p.message))
+        finish(ExitCode.INVALID)
+    for f in result.files:
+        entries.append(file_entry(f.path, layer, f.content, f.status.value))
         if not as_json:
             label = "dry-run" if dry_run else "written"
-            console.print(f"{escape(str(dest))} {label}", highlight=False)
+            console.print(f"{escape(str(f.path))} {label}", highlight=False)
     if unmapped:
         _print_unmapped(unmapped)
         failed = strict

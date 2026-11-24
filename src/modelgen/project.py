@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -113,51 +113,44 @@ def dest_path(output: Path, filename: str, tests_output: Path | None) -> Path:
     return output / filename
 
 
-def _produced_files(
-    cfg: ModelgenConfig,
+def render_mode(
+    contract_path: Path,
+    mode: str,
+    out_dir: Path,
+    tests_output: Path | None,
+    *,
     server: str | None,
-    unmapped: list[tuple[Path, str]],
-    notices: list[tuple[Path, Issue]],
-):
-    """Yield (contract, mode, destination, content).
-
-    On a contract error the destination is the error and content is "".
-
-    Covers the produced (`schema`) and extract (`sources`) modes, for the
-    contracts whose `*_output` key is set.
-    """
+    tables: list[str] | None,
+    unmapped: list[str],
+    notices: list[Issue],
+) -> list[_Unit]:
+    """One produced (`schema`) or extract (`sources`) contract, rendered in
+    memory, one unit per file. Raises ContractError."""
     from modelgen.schema_mode import render_schema
     from modelgen.sources_mode import render_sources
 
-    for files, out_dir, mode in (
-        (cfg.schema_contract_files(), cfg.schema_output, "schema"),
-        (cfg.sources_contract_files(), cfg.sources_output, "sources"),
-    ):
-        if not files or out_dir is None:
-            continue
-        for contract_path in files:
-            found: list[Issue] = []
-            found_unmapped: list[str] = []
-            try:
-                if mode == "schema":
-                    rendered = render_schema(
-                        contract_path,
-                        server=server,
-                        unmapped=found_unmapped,
-                        notices=found,
-                    )
-                else:
-                    rendered = render_sources(
-                        contract_path, unmapped=found_unmapped, notices=found
-                    )
-            except ContractError as e:
-                yield contract_path, mode, e, ""
-                continue
-            notices.extend((contract_path, n) for n in found)
-            unmapped.extend((contract_path, r) for r in found_unmapped)
-            for filename, content in rendered.items():
-                dest = dest_path(out_dir, filename, cfg.tests_output)
-                yield contract_path, mode, dest, content
+    if mode == "schema":
+        rendered = render_schema(
+            contract_path,
+            server=server,
+            tables=tables,
+            unmapped=unmapped,
+            notices=notices,
+        )
+    else:
+        rendered = render_sources(
+            contract_path, tables=tables, unmapped=unmapped, notices=notices
+        )
+    return [
+        _Unit(
+            contract_path,
+            contract_path.name,
+            mode,
+            [(dest_path(out_dir, filename, tests_output), content)],
+            (out_dir, tests_output),
+        )
+        for filename, content in rendered.items()
+    ]
 
 
 def _package_notices(
@@ -331,32 +324,45 @@ def _render(
                 events.items.append(item)
 
     produced = _Rendered()
-    for contract_path, mode, dest, content in _produced_files(
-        cfg, server, produced.unmapped, produced.notices
+    for files, out_dir, mode in (
+        (cfg.schema_contract_files(), cfg.schema_output, "schema"),
+        (cfg.sources_contract_files(), cfg.sources_output, "sources"),
     ):
-        if contract_path not in produced.contracts:
-            produced.contracts.append(contract_path)
-        if isinstance(dest, ContractError):
-            produced.items.append(
-                Problem(
-                    contract_path,
-                    contract_path.name,
-                    "parse",
-                    str(dest),
-                    ExitCode.INVALID,
-                    tuple(dest.issues),
-                )
-            )
+        if not files or out_dir is None:
             continue
-        produced.items.append(
-            _Unit(
-                contract_path,
-                contract_path.name,
-                mode,
-                [(dest, content)],
-                (cfg.schema_output, cfg.sources_output, cfg.tests_output),
+        for contract_path in files:
+            if contract_path not in produced.contracts:
+                produced.contracts.append(contract_path)
+            found: list[Issue] = []
+            found_unmapped: list[str] = []
+            try:
+                units = render_mode(
+                    contract_path,
+                    mode,
+                    out_dir,
+                    cfg.tests_output,
+                    server=server,
+                    tables=None,
+                    unmapped=found_unmapped,
+                    notices=found,
+                )
+            except ContractError as e:
+                produced.items.append(
+                    Problem(
+                        contract_path,
+                        contract_path.name,
+                        "parse",
+                        str(e),
+                        ExitCode.INVALID,
+                        tuple(e.issues),
+                    )
+                )
+                continue
+            produced.notices.extend((contract_path, n) for n in found)
+            produced.unmapped.extend(
+                (contract_path, r) for r in found_unmapped
             )
-        )
+            produced.items.extend(units)
 
     first, second = (
         (produced, events) if produced_first else (events, produced)
@@ -418,7 +424,7 @@ def _refused(unit: _Unit, e: GenerationError) -> Problem:
 
 
 def write_units(
-    items: list[_Unit | Problem],
+    items: Sequence[_Unit | Problem],
     result: ProjectResult,
     *,
     dry_run: bool,
