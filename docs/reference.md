@@ -263,7 +263,8 @@ Quality rules map per layer.
   `type: sql` rules become singular tests under `tests/generated/`.
   Anything unmapped is reported on stderr, never dropped, and `--strict`
   exits 3 for it.
-- `gen --staging` maps only `validValues` and reports nothing it skips.
+- `gen --staging` maps only `validValues`. Every other rule is reported on
+  stderr, never dropped, and the exit code does not change.
   `gen --raw` emits no quality tests.
 
 Staging renders `accepted_values` with no `where`; `schema` and `sources`

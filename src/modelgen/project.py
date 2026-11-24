@@ -289,6 +289,10 @@ def _render(
                         )
                     )
                     continue
+                if layer == Layer.STAGING:
+                    events.unmapped.extend(
+                        (contract_path, r) for r in event.unmapped_rules
+                    )
                 events.items.append(
                     _Unit(
                         contract_path,
@@ -339,7 +343,7 @@ def _render(
     return _Rendered(
         first.contracts + second.contracts,
         first.items + second.items,
-        produced.unmapped,
+        first.unmapped + second.unmapped,
         cfg.notices
         + first.notices
         + second.notices

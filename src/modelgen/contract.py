@@ -63,7 +63,7 @@ from modelgen.dialect import (
     supported_server_types,
 )
 from modelgen.errors import ModelgenError
-from modelgen.quality import valid_values
+from modelgen.quality import staging_unmapped, valid_values
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -605,6 +605,7 @@ class EventContract:
     contract_version: str = ""  # ODCS top-level version
     pointer: str = ""  # JSON pointer of its ODCS schema object
     notices: tuple[Issue, ...] = ()
+    unmapped_rules: list[str] = field(default_factory=list)
 
     @property
     def classified_columns(self) -> list[StagingColumn]:
@@ -720,7 +721,7 @@ class EventContract:
                 f" Object: {obj.get('name')}."
             )
 
-        return cls(
+        event = cls(
             name=obj["name"],
             description=obj.get("description", ""),
             unique_key=_unique_key_from_properties(props),
@@ -747,6 +748,8 @@ class EventContract:
             pointer=pointer,
             notices=deprecation_notices(doc),
         )
+        event.unmapped_rules = staging_unmapped(obj, event.staging_model_name)
+        return event
 
 
 def select_schema_objects(
