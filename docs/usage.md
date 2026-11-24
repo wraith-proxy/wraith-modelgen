@@ -294,7 +294,7 @@ once per run, even when both layers use it.
 Unmapped quality rules print on stderr and `run` still exits `0`. `run` has no
 `--strict`; use `schema --strict` or `sources --strict` as a CI gate. `run`
 exits `1` when a `schema_contracts` or `sources_contracts` pattern matches
-nothing. A `*_contracts` key without its `*_output` key is skipped silently.
+nothing. A `*_contracts` key without its `*_output` key is skipped with a warning.
 
 ---
 
@@ -347,7 +347,10 @@ failures the precedence above applies.
 ## Configuration: `.modelgen.yml`
 
 `run` and `check` read it; `gen`, `schema`, `sources` and `validate` never do.
-Paths are relative to the file. Unknown keys are ignored silently.
+Paths are relative to the file. Unknown keys are ignored with a warning that
+names the nearest valid key. Config warnings go to stderr and, with
+`--format json`, into `issues` with `severity: warning`. They do not change
+the exit code.
 
 ```yaml
 contracts: contracts/events/*.yml
@@ -372,7 +375,8 @@ tests_output: dbt/tests
 | `tests_output` | unset | `run`, `check` |
 
 - Set each `*_contracts` key together with its `*_output`; a pattern without
-  its output is skipped silently by `run` and `check`.
+  its output, or an output without its pattern, is skipped by `run` and
+  `check` with a warning.
 - `tests_output` replaces the leading `tests` of generated singular-test
   paths. Pair it with `--tests-output` on `schema`/`sources`.
 - The default `contracts` glob is `*.yml`. `*.odcs.yaml` files need their own

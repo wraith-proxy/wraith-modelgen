@@ -541,12 +541,15 @@ def _stop(
     cfg: ModelgenConfig | None = None,
     message: str = "",
 ) -> None:
+    notices = cfg.notices if cfg else []
+    _print_notices(n for _, n in notices)
     if output_format is OutputFormat.JSON:
         issues = (
             [plain_issue(cfg.root if cfg else ".", "contract", message)]
             if message
             else []
         )
+        issues += [contract_issue(p, n) for p, n in notices]
         emit(build_report(command, code, [], issues, []))
     raise typer.Exit(code)
 
@@ -922,7 +925,7 @@ def run(
             f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
             f" matched nothing in {cfg.root}"
         )
-        _stop("run", ExitCode.OK, output_format)
+        _stop("run", ExitCode.OK, output_format, cfg)
 
     as_json = output_format is OutputFormat.JSON
     if not as_json:
@@ -1063,7 +1066,7 @@ def check(
             f"Pattern [dim]{cfg.contracts_glob!r}[/dim]"
             f" matched nothing in {cfg.root}"
         )
-        _stop("check", ExitCode.OK, output_format)
+        _stop("check", ExitCode.OK, output_format, cfg)
 
     result = check_project(
         cfg, server=server, from_contract=from_contract, notify=_notify

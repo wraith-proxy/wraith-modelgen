@@ -288,7 +288,7 @@ def _render(
         first.contracts + second.contracts,
         first.items + second.items,
         produced.unmapped,
-        first.notices + second.notices,
+        cfg.notices + first.notices + second.notices,
     )
 
 

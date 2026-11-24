@@ -136,7 +136,7 @@ Unmapped quality rules print on stderr as `modelgen: N quality rule(s) not mappe
 
 Gotchas:
 
-- A `*_contracts` key without its `*_output` key is skipped silently.
+- A `*_contracts` key without its `*_output` key is skipped with a warning naming both keys. The exit code does not change.
 - To fail CI on unmapped quality rules, use `modelgen schema --strict` or `modelgen sources --strict`.
 
 ### `schema`
@@ -202,7 +202,7 @@ Drifted repo: a `--- <path>` header and a unified diff for each drifted file, th
 
 When no contracts match the `contracts` glob and no `schema_contracts` or `sources_contracts` pattern is set, `check` prints `No contracts found.` and succeeds. A `schema_contracts` or `sources_contracts` pattern that matches no files fails even when other contracts exist.
 
-Gotcha: `schema_contracts` and `sources_contracts` are only checked when their `schema_output` and `sources_output` keys are set. Without them, matched contracts are skipped by the drift comparison and do not fail the run.
+Gotcha: `schema_contracts` and `sources_contracts` are only checked when their `schema_output` and `sources_output` keys are set. Without them, matched contracts are skipped by the drift comparison and do not fail the run. `check` prints a warning naming both keys.
 
 ### Python API
 
@@ -217,7 +217,7 @@ Gotchas:
 
 ## ⚙️ Configuration: `.modelgen.yml`
 
-Put the file at the repo root. Every path in it is relative to the directory that holds the file. `run` and `check` find it by walking up from the current directory, or take `--config PATH` (`-c`). With no file found, the defaults apply and the root is the current directory. An empty file means defaults. A file whose top level is not a mapping is a config error (exit 1). Unknown keys are ignored without a warning, so a typo in a key name fails quietly.
+Put the file at the repo root. Every path in it is relative to the directory that holds the file. `run` and `check` find it by walking up from the current directory, or take `--config PATH` (`-c`). With no file found, the defaults apply and the root is the current directory. An empty file means defaults. A file whose top level is not a mapping is a config error (exit 1). Unknown keys are ignored with a warning that names the key and the nearest valid key, such as `unknown key 'staging_ouput' is ignored; did you mean 'staging_output'?`. Warnings go to stderr and, with `--format json`, into `issues` with `severity: warning`. They do not change the exit code.
 
 | Key | Default | Read by | What it does |
 |-----|---------|---------|--------------|
@@ -249,7 +249,7 @@ Gotchas, all from the code:
 
 - `run` writes the produced and extract yml and their singular tests when the `*_contracts` and `*_output` keys are set, so `run` then `check` is a clean round trip.
 - `schema_contracts` or `sources_contracts` set to a glob that matches nothing makes `run` and `check` exit 1 and name the key.
-- A `schema_contracts` or `sources_contracts` glob without its `*_output` key is skipped silently by `run` and `check`. Set both or neither.
+- A `schema_contracts` or `sources_contracts` glob without its `*_output` key, or an `*_output` key without its glob, is skipped by `run` and `check` with a warning. Set both or neither.
 - `run` has no `--strict`. It prints unmapped quality rules on stderr and exits 0. Use `schema --strict` or `sources --strict` as a CI gate.
 - The default `contracts` glob is `*.yml`. ODCS files named `*.odcs.yaml` need their own glob.
 - Keep extract contracts out of the `contracts` glob. Event contracts require `modelgenLoadedAtField` on each schema object. `run` and `check` report its absence as a `parse` error. Extract contracts do not carry that property.
@@ -660,7 +660,6 @@ Clean output ends with `Everything in sync. <n> file(s) match their contracts.` 
 
 - The version falls back to `0.0.0` when the package is not installed.
 - Generated quality tests call `dbt_expectations.*` macros. The consuming dbt project must install the dbt-expectations package. modelgen does not check for it.
-- `modelgen run` skips a `schema_contracts` or `sources_contracts` key silently when its `*_output` key is missing.
 
 ---
 

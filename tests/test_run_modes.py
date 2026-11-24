@@ -1,5 +1,6 @@
 """`run` renders produced and extract contracts; run then check is clean."""
 
+import json
 import os
 import subprocess
 import sys
@@ -164,3 +165,74 @@ def _add_prose_rule(path: Path) -> None:
             1,
         )
     )
+
+
+def test_unknown_config_key_is_named_with_nearest_key(tmp_path):
+    (tmp_path / ".modelgen.yml").write_text("staging_ouput: models/stg\n")
+    result = _cli("run", cwd=tmp_path)
+    assert "staging_ouput" in result.stderr
+    assert "staging_output" in result.stderr
+
+
+def test_contracts_key_without_its_output_key_is_reported(tmp_path):
+    proj = _project(
+        tmp_path, "bus-marts", "schema_contracts: contracts/*.odcs.yaml\n"
+    )
+    result = _cli("check", cwd=proj)
+    assert "schema_contracts" in result.stderr
+    assert "schema_output" in result.stderr
+
+
+def test_config_warning_is_in_the_json_report(tmp_path):
+    (tmp_path / ".modelgen.yml").write_text("contract: contracts/*.yml\n")
+    report = json.loads(_cli("run", "--format", "json", cwd=tmp_path).stdout)
+    assert report["ok"] is True
+    assert [i["severity"] for i in report["issues"]] == ["warning"]
+    assert "'contracts'" in report["issues"][0]["message"]
+
+
+def test_every_documented_key_is_accepted_without_warning(tmp_path):
+    proj = _project(
+        tmp_path,
+        "bus-marts",
+        "contracts: contracts/*.yml\n"
+        "raw_output: models/raw\n"
+        "staging_output: models/staging\n"
+        "schema_contracts: contracts/*.odcs.yaml\n"
+        "schema_output: models/marts\n"
+        "sources_contracts: contracts/*.odcs.yaml\n"
+        "sources_output: models/staging\n"
+        "tests_output: tests\n",
+    )
+    result = _cli("check", cwd=proj, check=False)
+    assert result.returncode == 4
+    assert "unknown key" not in result.stderr
+    assert "is set without" not in result.stderr
+
+
+def test_output_key_without_its_glob_warns_once_on_run(tmp_path):
+    proj = _project(
+        tmp_path,
+        "bus-marts",
+        "schema_contracts: contracts/*.odcs.yaml\n"
+        "schema_output: models/marts\n"
+        "sources_output: models/staging\n",
+    )
+    stderr = _cli("run", cwd=proj).stderr
+    assert stderr.count("'sources_output' is set without") == 1
+    assert list((proj / "models" / "marts").glob("*.yml"))
+
+
+def test_config_warning_survives_a_pattern_that_matches_nothing(tmp_path):
+    (tmp_path / ".modelgen.yml").write_text(
+        "schema_contracts: missing/*.yml\n"
+        "schema_output: models/marts\n"
+        "raw_ouput: models/raw\n"
+    )
+    result = _cli("check", "--format", "json", cwd=tmp_path, check=False)
+    assert result.returncode == 1
+    report = json.loads(result.stdout)
+    assert sorted(i["severity"] for i in report["issues"]) == [
+        "error",
+        "warning",
+    ]
