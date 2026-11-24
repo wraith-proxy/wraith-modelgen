@@ -217,7 +217,7 @@ Gotchas:
 
 ## ⚙️ Configuration: `.modelgen.yml`
 
-Put the file at the repo root. Every path in it is relative to the directory that holds the file. `run` and `check` find it by walking up from the current directory, or take `--config PATH` (`-c`). With no file found, the defaults apply and the root is the current directory. An empty file means defaults. A file whose top level is not a mapping is a config error (exit 1). Unknown keys are ignored with a warning that names the key and the nearest valid key, such as `unknown key 'staging_ouput' is ignored; did you mean 'staging_output'?`. Warnings go to stderr and, with `--format json`, into `issues` with `severity: warning`. They do not change the exit code.
+Put the file at the repo root. Every path in it is relative to the directory that holds the file. `run` and `check` find it by walking up from the current directory, or take `--config PATH` (`-c`). With no file found, the defaults apply and the root is the current directory. An empty file means defaults. A file whose top level is not a mapping is a config error (exit 1). Every key takes a string. Any other value, such as `contracts: false`, is a config error (exit 1) that names the key and the type it got: `'contracts' must be a string, got bool`. A key set to null counts as absent, so its default applies. Unknown keys are ignored with a warning that names the key and the nearest valid key, such as `unknown key 'staging_ouput' is ignored; did you mean 'staging_output'?`. Warnings go to stderr and, with `--format json`, into `issues` with `severity: warning`. They do not change the exit code.
 
 | Key | Default | Read by | What it does |
 |-----|---------|---------|--------------|
