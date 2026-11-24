@@ -126,7 +126,16 @@ class ModelgenConfig:
             raise ConfigError(f"Failed to parse {path}: {e}") from e
         if not isinstance(raw, dict):
             raise ConfigError(f"{path} must be a YAML mapping.")
-        cfg = cls._build(path.parent, raw)
+        for key in _KEYS:
+            value = raw.get(key)
+            if value is not None and not isinstance(value, str):
+                raise ConfigError(
+                    f"{key!r} must be a string, got"
+                    f" {type(value).__name__} in {path}"
+                )
+        cfg = cls._build(
+            path.parent, {k: v for k, v in raw.items() if v is not None}
+        )
         cfg.notices = [(path, n) for n in _key_notices(raw)]
         return cfg
 
