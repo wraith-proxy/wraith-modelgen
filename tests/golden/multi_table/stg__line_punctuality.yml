@@ -3,7 +3,7 @@ version: 2
 
 models:
   - name: stg__line_punctuality
-    description: "Consumption Data Product. Stable contract for line_punctuality. Casts and renames here absorb upstream schema drift so downstream FDPs do not break."
+    description: "Staging layer. Stable interface for line_punctuality. Casts and renames here absorb upstream schema drift so downstream models do not break."
     config:
       materialized: table
       schema: staging

@@ -31,7 +31,7 @@ sources:
 
 models:
   - name: raw__user_signed_up
-    description: "Origin Data Product. Deduplicated raw view of user_signed_up. Schema mirrors source; new columns flow through."
+    description: "Raw layer. Deduplicated raw view of user_signed_up. Schema mirrors source; new columns flow through."
     config:
       materialized: incremental
       incremental_strategy: merge

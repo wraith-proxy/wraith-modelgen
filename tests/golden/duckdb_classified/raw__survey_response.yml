@@ -25,7 +25,7 @@ sources:
 
 models:
   - name: raw__survey_response
-    description: "Origin Data Product. Pass-through raw view of survey_response. Schema mirrors source; new columns flow through."
+    description: "Raw layer. Pass-through raw view of survey_response. Schema mirrors source; new columns flow through."
     config:
       materialized: view
       schema: raw

@@ -2,10 +2,11 @@
 Schema-only generation for tables a project PRODUCES.
 
 Raw and staging generation assume event ingestion: a loaded-at column per
-table and a `sources:` block of landed events. A contract for a produced
-table (CDP, FDP, marts) has neither. This mode reads only the schema
-objects: it emits one dbt `models:` yml per contract, with enforced
-column types, constraints and key tests, and no SQL.
+table and a `sources:` block of landed events. A produced contract,
+covering marts and other tables the project builds, has neither. This
+mode reads only the schema objects: it emits one dbt `models:` yml per
+contract, with enforced column types, constraints and key tests, and no
+SQL.
 
 Deterministic like the rest of the generator: no paths, no timestamps,
 contract order throughout.

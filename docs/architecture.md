@@ -45,8 +45,8 @@ The layers have different owners and different jobs.
 
 ```mermaid
 flowchart LR
-    SRC[("BigQuery\nsource table")] -->|"explicit columns\n(introspected)"| RAW["raw__event\nOrigin Data Product\nowned by source team"]
-    RAW -->|"{{ ref(...) }}"| STG["stg__event\nConsumption Data Product\nowned by analytics"]
+    SRC[("BigQuery\nsource table")] -->|"explicit columns\n(introspected)"| RAW["raw__event\nRaw layer\nowned by source team"]
+    RAW -->|"{{ ref(...) }}"| STG["stg__event\nStaging layer\nowned by analytics"]
     STG --> DOWN["Downstream\nconsumers"]
 
     CTR["📄 contract.yml"] -. "introspects schema\nat gen time" .-> SRC

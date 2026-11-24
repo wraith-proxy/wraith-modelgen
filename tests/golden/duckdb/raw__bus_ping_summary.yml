@@ -25,7 +25,7 @@ sources:
 
 models:
   - name: raw__bus_ping_summary
-    description: "Origin Data Product. Pass-through raw view of bus_ping_summary. Schema mirrors source; new columns flow through."
+    description: "Raw layer. Pass-through raw view of bus_ping_summary. Schema mirrors source; new columns flow through."
     config:
       materialized: view
       schema: raw

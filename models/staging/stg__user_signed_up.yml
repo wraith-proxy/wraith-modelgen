@@ -3,7 +3,7 @@ version: 2
 
 models:
   - name: stg__user_signed_up
-    description: "Consumption Data Product. Stable contract for user_signed_up. Casts and renames here absorb upstream schema drift so downstream FDPs do not break."
+    description: "Staging layer. Stable interface for user_signed_up. Casts and renames here absorb upstream schema drift so downstream models do not break."
     config:
       materialized: incremental
       incremental_strategy: insert_overwrite
