@@ -35,7 +35,7 @@ sources:
 
 models:
   - name: raw__eta_models
-    description: "Origin Data Product. Pass-through raw view of eta_models. Schema mirrors source; new columns flow through."
+    description: "Raw layer. Pass-through raw view of eta_models. Schema mirrors source; new columns flow through."
     config:
       materialized: view
       schema: raw

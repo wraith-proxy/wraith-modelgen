@@ -3,7 +3,7 @@ version: 2
 
 models:
   - name: stg__bus_ping_summary
-    description: "Consumption Data Product. Stable contract for bus_ping_summary. Casts and renames here absorb upstream schema drift so downstream FDPs do not break."
+    description: "Staging layer. Stable interface for bus_ping_summary. Casts and renames here absorb upstream schema drift so downstream models do not break."
     config:
       materialized: table
       schema: staging
