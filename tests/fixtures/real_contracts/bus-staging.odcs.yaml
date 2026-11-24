@@ -1,6 +1,6 @@
 # Open Data Contract Standard v3.2.0
 #
-# CDP: the STAGING layer outputs (stg_bods__vehicle_pings, stg_naptan__stops).
+# The staging models (stg_bods__vehicle_pings, stg_naptan__stops).
 #
 # `consumes` custom properties on each schema object list exactly the upstream
 # columns the model reads, as "<contract file stem>.<table>.<column>".
@@ -8,7 +8,7 @@
 apiVersion: v3.2.0
 kind: DataContract
 id: c4a1d7e2-6b3f-4e58-9a10-3d5f8e2b7c91
-name: wraith_bus_cdp
+name: wraith_bus_staging
 version: 1.0.0
 status: active
 domain: transit
@@ -17,11 +17,10 @@ tags:
 - transit
 - bus
 - staging
-- cdp
 description:
-  purpose: 'CDP layer (staging): typed, filtered, per-row-derived tables built from the extract Parquet and the NaPTAN CSV. Everything downstream joins to these, never to the raw files.'
-  usage: Producer is the dbt project's staging models (stg_bods__vehicle_pings, stg_naptan__stops). Consumers are the FDP models in bus-fdp. Each schema object lists the upstream columns it reads as `consumes` custom properties ("<contract>.<table>.<column>"; contract = the file stem under contracts/). Column types were inferred from the DuckDB expressions in the model SQL and are recorded per column in `typeInferredFrom`. Not enforced by dbt yet.
-  limitations: Types inferred from the SQL, not read from a warehouse. History tables (int_eta_daily_stats, int_journey_delays) live in bus-fdp; they are incremental and are never full-refreshed. stg_naptan__stops has no `consumes` because the raw NaPTAN CSV has no contract.
+  purpose: 'The staging models: typed, filtered, per-row-derived tables built from the extract Parquet and the NaPTAN CSV. Everything downstream joins to these, never to the raw files.'
+  usage: Producer is the dbt project's staging models (stg_bods__vehicle_pings, stg_naptan__stops). Consumers are the intermediate models in bus-intermediate. Each schema object lists the upstream columns it reads as `consumes` custom properties ("<contract>.<table>.<column>"; contract = the file stem under contracts/). Column types were inferred from the DuckDB expressions in the model SQL and are recorded per column in `typeInferredFrom`. Not enforced by dbt yet.
+  limitations: Types inferred from the SQL, not read from a warehouse. History tables (int_eta_daily_stats, int_journey_delays) live in bus-intermediate; they are incremental and are never full-refreshed. stg_naptan__stops has no `consumes` because the raw NaPTAN CSV has no contract.
 servers:
 - server: build-warehouse
   type: duckdb

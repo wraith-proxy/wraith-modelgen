@@ -379,7 +379,7 @@ def test_real_bus_positions_extract_rules_mapped():
 
 def test_generated_ymls_parse(tmp_path):
     for name in (
-        "bus-marts", "bus-cdp", "bus-fdp", "gtfs-timetable",
+        "bus-marts", "bus-staging", "bus-intermediate", "gtfs-timetable",
         "bus-positions-extract",
     ):  # fmt: skip
         files, _ = _render(REAL / f"{name}.odcs.yaml")

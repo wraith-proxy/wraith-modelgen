@@ -13,7 +13,7 @@ HERE = Path(__file__).parent
 REAL = HERE / "fixtures" / "real_contracts"
 GOLDEN = HERE / "golden" / "schema_mode"
 _RUNNER = "from modelgen.cli import main; main()"
-NAMES = ["bus-marts", "bus-cdp", "bus-fdp", "gtfs-timetable"]
+NAMES = ["bus-marts", "bus-staging", "bus-intermediate", "gtfs-timetable"]
 COMPOUND = "dbt_expectations.expect_compound_columns_to_be_unique"
 
 
@@ -64,8 +64,8 @@ def test_schema_mode_consumes_real_bus_marts():
     ]
 
 
-def test_schema_mode_consumes_real_cdp_and_fdp():
-    for name in ("bus-cdp", "bus-fdp"):
+def test_schema_mode_consumes_real_staging_and_intermediate():
+    for name in ("bus-staging", "bus-intermediate"):
         _, doc = _rendered(name)
         assert doc["models"]
 
@@ -139,8 +139,8 @@ def test_no_sources_block_and_no_loaded_at_required():
 
 
 def test_custom_properties_become_meta():
-    models = _models("bus-cdp")
-    contract = yaml.safe_load(_contract("bus-cdp").read_text())
+    models = _models("bus-staging")
+    contract = yaml.safe_load(_contract("bus-staging").read_text())
     for obj in contract["schema"]:
         expected: dict = {}
         for cp in obj.get("customProperties", []):

@@ -1,6 +1,6 @@
 # Open Data Contract Standard v3.2.0
 #
-# FDP: the PRES layer, the five intermediate models.
+# The five intermediate models.
 #
 # `consumes` custom properties on each schema object list exactly the upstream
 # columns the model reads, as "<contract file stem>.<table>.<column>".
@@ -8,7 +8,7 @@
 apiVersion: v3.2.0
 kind: DataContract
 id: e8b2f6a3-1d47-4c90-b5e6-7a9c3d1f4b28
-name: wraith_bus_fdp
+name: wraith_bus_intermediate
 version: 1.0.0
 status: active
 domain: transit
@@ -16,10 +16,9 @@ tenant: ghost-stack
 tags:
 - transit
 - bus
-- presentation
-- fdp
+- intermediate
 description:
-  purpose: 'FDP layer (presentation): the five intermediate models that segment pings into journeys, measure the ETA training set, and keep the two daily history tables the marts are built from.'
+  purpose: 'The five intermediate models that segment pings into journeys, measure the ETA training set, and keep the two daily history tables the marts are built from.'
   usage: Producer is dbt/models/intermediate. Consumers are the marts (bus-marts) and, within this contract, the models that read each other. Each schema object lists the upstream columns it reads as `consumes` custom properties ("<contract>.<table>.<column>"; contract = the file stem under contracts/). Column types were inferred from the DuckDB expressions in the model SQL and are recorded per column in `typeInferredFrom`. Where a column is also in the intermediate yml, its description is copied from there.
   limitations: 'History tables int_eta_daily_stats and int_journey_delays are incremental and are the only place history older than the extract window lives (ADR-0010): they are never full-refreshed; FULL_REFRESH=1 keeps them and only an ops/incident.py replay rebuilds them. int_pings_segmented_to_journeys is also incremental. The yml omits several output columns (bus_id, operator, journey_ref, start/end timestamps and coordinates, ping_ts, ...); the SQL is the source for these. Types inferred from the SQL, not read from a warehouse.'
 servers:
@@ -44,37 +43,37 @@ schema:
   dataGranularityDescription: One row per ping, with the journey it belongs to.
   customProperties:
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.bus_id
+    value: bus-staging.stg_bods__vehicle_pings.bus_id
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.line
+    value: bus-staging.stg_bods__vehicle_pings.line
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.feed_direction
+    value: bus-staging.stg_bods__vehicle_pings.feed_direction
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.operator
+    value: bus-staging.stg_bods__vehicle_pings.operator
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.recorded_at
+    value: bus-staging.stg_bods__vehicle_pings.recorded_at
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.journey_ref
+    value: bus-staging.stg_bods__vehicle_pings.journey_ref
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.origin_ref
+    value: bus-staging.stg_bods__vehicle_pings.origin_ref
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.dest_ref
+    value: bus-staging.stg_bods__vehicle_pings.dest_ref
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.ping_ts
+    value: bus-staging.stg_bods__vehicle_pings.ping_ts
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.ping_local_date
+    value: bus-staging.stg_bods__vehicle_pings.ping_local_date
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.hour_band
+    value: bus-staging.stg_bods__vehicle_pings.hour_band
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.day_type
+    value: bus-staging.stg_bods__vehicle_pings.day_type
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.lat
+    value: bus-staging.stg_bods__vehicle_pings.lat
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.lon
+    value: bus-staging.stg_bods__vehicle_pings.lon
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.origin_aimed_dep_ts
+    value: bus-staging.stg_bods__vehicle_pings.origin_aimed_dep_ts
   - property: consumes
-    value: bus-cdp.stg_bods__vehicle_pings.dest_aimed_arr_ts
+    value: bus-staging.stg_bods__vehicle_pings.dest_aimed_arr_ts
   properties:
   - id: seg_journey_key
     name: journey_key
@@ -283,43 +282,43 @@ schema:
   dataGranularityDescription: One row per surviving journey.
   customProperties:
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.journey_key
+    value: bus-intermediate.int_pings_segmented_to_journeys.journey_key
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.bus_id
+    value: bus-intermediate.int_pings_segmented_to_journeys.bus_id
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.line
+    value: bus-intermediate.int_pings_segmented_to_journeys.line
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.feed_direction
+    value: bus-intermediate.int_pings_segmented_to_journeys.feed_direction
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.operator
+    value: bus-intermediate.int_pings_segmented_to_journeys.operator
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.journey_ref
+    value: bus-intermediate.int_pings_segmented_to_journeys.journey_ref
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.origin_ref
+    value: bus-intermediate.int_pings_segmented_to_journeys.origin_ref
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.dest_ref
+    value: bus-intermediate.int_pings_segmented_to_journeys.dest_ref
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.origin_aimed_dep_ts
+    value: bus-intermediate.int_pings_segmented_to_journeys.origin_aimed_dep_ts
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.dest_aimed_arr_ts
+    value: bus-intermediate.int_pings_segmented_to_journeys.dest_aimed_arr_ts
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.ping_ts
+    value: bus-intermediate.int_pings_segmented_to_journeys.ping_ts
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.lat
+    value: bus-intermediate.int_pings_segmented_to_journeys.lat
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.lon
+    value: bus-intermediate.int_pings_segmented_to_journeys.lon
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.cum_km
+    value: bus-intermediate.int_pings_segmented_to_journeys.cum_km
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.ping_seq
+    value: bus-intermediate.int_pings_segmented_to_journeys.ping_seq
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.hour_band
+    value: bus-intermediate.int_pings_segmented_to_journeys.hour_band
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.day_type
+    value: bus-intermediate.int_pings_segmented_to_journeys.day_type
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.first_moving_seq
+    value: bus-intermediate.int_pings_segmented_to_journeys.first_moving_seq
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.last_moving_seq
+    value: bus-intermediate.int_pings_segmented_to_journeys.last_moving_seq
   properties:
   - id: jrn_journey_key
     name: journey_key
@@ -553,35 +552,35 @@ schema:
   dataGranularityDescription: One row per ping of a surviving journey, up to two short of its end.
   customProperties:
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.journey_key
+    value: bus-intermediate.int_journeys_shaped_and_directed.journey_key
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.direction
+    value: bus-intermediate.int_journeys_shaped_and_directed.direction
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.operator
+    value: bus-intermediate.int_journeys_shaped_and_directed.operator
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.end_ts
+    value: bus-intermediate.int_journeys_shaped_and_directed.end_ts
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.path_km
+    value: bus-intermediate.int_journeys_shaped_and_directed.path_km
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.start_cum_km
+    value: bus-intermediate.int_journeys_shaped_and_directed.start_cum_km
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.start_ping_seq
+    value: bus-intermediate.int_journeys_shaped_and_directed.start_ping_seq
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.end_ping_seq
+    value: bus-intermediate.int_journeys_shaped_and_directed.end_ping_seq
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.journey_key
+    value: bus-intermediate.int_pings_segmented_to_journeys.journey_key
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.line
+    value: bus-intermediate.int_pings_segmented_to_journeys.line
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.hour_band
+    value: bus-intermediate.int_pings_segmented_to_journeys.hour_band
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.day_type
+    value: bus-intermediate.int_pings_segmented_to_journeys.day_type
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.ping_ts
+    value: bus-intermediate.int_pings_segmented_to_journeys.ping_ts
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.ping_seq
+    value: bus-intermediate.int_pings_segmented_to_journeys.ping_seq
   - property: consumes
-    value: bus-fdp.int_pings_segmented_to_journeys.cum_km
+    value: bus-intermediate.int_pings_segmented_to_journeys.cum_km
   properties:
   - id: mea_journey_key
     name: journey_key
@@ -683,25 +682,25 @@ schema:
   dataGranularityDescription: One row per (stats_date, operator, line, direction, day_type, hour_band); operator and direction may be NULL and form their own group.
   customProperties:
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.journey_key
+    value: bus-intermediate.int_journeys_shaped_and_directed.journey_key
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.end_ts
+    value: bus-intermediate.int_journeys_shaped_and_directed.end_ts
   - property: consumes
-    value: bus-fdp.int_pings_measured_to_journey_end.journey_key
+    value: bus-intermediate.int_pings_measured_to_journey_end.journey_key
   - property: consumes
-    value: bus-fdp.int_pings_measured_to_journey_end.operator
+    value: bus-intermediate.int_pings_measured_to_journey_end.operator
   - property: consumes
-    value: bus-fdp.int_pings_measured_to_journey_end.line
+    value: bus-intermediate.int_pings_measured_to_journey_end.line
   - property: consumes
-    value: bus-fdp.int_pings_measured_to_journey_end.direction
+    value: bus-intermediate.int_pings_measured_to_journey_end.direction
   - property: consumes
-    value: bus-fdp.int_pings_measured_to_journey_end.day_type
+    value: bus-intermediate.int_pings_measured_to_journey_end.day_type
   - property: consumes
-    value: bus-fdp.int_pings_measured_to_journey_end.hour_band
+    value: bus-intermediate.int_pings_measured_to_journey_end.hour_band
   - property: consumes
-    value: bus-fdp.int_pings_measured_to_journey_end.remaining_km
+    value: bus-intermediate.int_pings_measured_to_journey_end.remaining_km
   - property: consumes
-    value: bus-fdp.int_pings_measured_to_journey_end.remaining_secs
+    value: bus-intermediate.int_pings_measured_to_journey_end.remaining_secs
   properties:
   - id: eta_stats_date
     name: stats_date
@@ -813,19 +812,19 @@ schema:
   dataGranularityDescription: One row per journey that has a scheduled arrival, a feed direction and a delay within +-2 hours.
   customProperties:
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.journey_key
+    value: bus-intermediate.int_journeys_shaped_and_directed.journey_key
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.line
+    value: bus-intermediate.int_journeys_shaped_and_directed.line
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.direction
+    value: bus-intermediate.int_journeys_shaped_and_directed.direction
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.day_type
+    value: bus-intermediate.int_journeys_shaped_and_directed.day_type
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.hour_band
+    value: bus-intermediate.int_journeys_shaped_and_directed.hour_band
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.end_ts
+    value: bus-intermediate.int_journeys_shaped_and_directed.end_ts
   - property: consumes
-    value: bus-fdp.int_journeys_shaped_and_directed.dest_aimed_arr_ts
+    value: bus-intermediate.int_journeys_shaped_and_directed.dest_aimed_arr_ts
   properties:
   - id: dly_stats_date
     name: stats_date
