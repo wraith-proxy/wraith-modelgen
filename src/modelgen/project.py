@@ -154,6 +154,58 @@ def _produced_files(
                 yield contract_path, mode, dest, content
 
 
+def _package_notices(
+    cfg: ModelgenConfig, items: list[_Unit | Problem]
+) -> list[tuple[Path, Issue]]:
+    if not any(
+        "dbt_expectations." in content
+        for item in items
+        if isinstance(item, _Unit)
+        for _, content in item.files
+    ):
+        return []
+    outputs = (
+        cfg.raw_output,
+        cfg.staging_output,
+        cfg.schema_output,
+        cfg.sources_output,
+        cfg.tests_output,
+    )
+    root = cfg.root.resolve()
+    for out in filter(None, outputs):
+        out = out.resolve()
+        project = next(
+            (
+                d
+                for d in [out, *out.parents]
+                if d.is_relative_to(root) and (d / "dbt_project.yml").is_file()
+            ),
+            None,
+        )
+        if project and not _installs_expectations(project):
+            return [
+                (
+                    project / "dbt_project.yml",
+                    Issue(
+                        "dbt-package-missing",
+                        f"dbt project {project} does not install"
+                        " dbt_expectations, which the generated tests call."
+                        " Add it to packages.yml",
+                        severity="warning",
+                    ),
+                )
+            ]
+    return []
+
+
+def _installs_expectations(directory: Path) -> bool:
+    return (directory / "dbt_packages" / "dbt_expectations").is_dir() or any(
+        "dbt_expectations" in (directory / name).read_text()
+        for name in ("packages.yml", "dependencies.yml")
+        if (directory / name).is_file()
+    )
+
+
 def _render(
     cfg: ModelgenConfig,
     *,
@@ -237,6 +289,10 @@ def _render(
                         )
                     )
                     continue
+                if layer == Layer.STAGING:
+                    events.unmapped.extend(
+                        (contract_path, r) for r in event.unmapped_rules
+                    )
                 events.items.append(
                     _Unit(
                         contract_path,
@@ -287,8 +343,11 @@ def _render(
     return _Rendered(
         first.contracts + second.contracts,
         first.items + second.items,
-        produced.unmapped,
-        first.notices + second.notices,
+        first.unmapped + second.unmapped,
+        cfg.notices
+        + first.notices
+        + second.notices
+        + _package_notices(cfg, first.items + second.items),
     )
 
 

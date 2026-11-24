@@ -12,7 +12,7 @@
 
 Given a YAML data contract (ODCS v3.0.2, v3.1.0 or v3.2.0) describing a source table, `wraith-modelgen` generates:
 
-- **Raw model** (`raw__<event>.sql` + `.yml`): pass-through incremental model with optional dedup via `row_number()`. Schema mirrors source; new columns flow through automatically.
+- **Raw model** (`raw__<event>.sql` + `.yml`): pass-through incremental model with optional dedup via `row_number()`. Columns come from the contract by default, or mirror the source table with `--introspect`.
 - **Staging model** (`stg__<event>.sql` + `.yml`): consumer-facing contract with explicit column selection, renames, and casts. Absorbs upstream schema drift so downstream never sees it.
 
 - **Models yml** (`modelgen schema`): `_<contract>__models.yml` plus dbt tests mapped from the contract's quality rules, for tables your project produces.
@@ -87,8 +87,8 @@ modelgen gen contract.yml --layer schema -o ./models/marts
 
 ## Credentials
 
-`new`, and `gen`, `run` and `check` on contracts whose selected server uses the BigQuery dialect,
-call BigQuery to introspect source table schemas, using Application Default Credentials. `schema`, `sources` and `validate` never do:
+`new` always calls BigQuery to introspect the source table, using Application Default Credentials.
+`gen`, `run` and `check` call it only with `--introspect`, on contracts whose selected server uses the BigQuery dialect. `schema`, `sources` and `validate` never do:
 
 ```bash
 gcloud auth application-default login
@@ -96,10 +96,9 @@ gcloud auth application-default login
 
 Or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key file.
 
-All but `new` also run without credentials: pass `--from-contract` to
-generate from the contract's declared columns alone, which is what CI does.
-Without the flag they use contract-only introspection automatically when no credentials are
-found, and always for a DuckDB or local contract. `new` always needs BigQuery, since it has nothing to work from but the
+All but `new` run without credentials. `gen`, `run` and `check` use
+contract-only introspection by default, and always for a DuckDB or local contract.
+With `--introspect` and no credentials they fall back to it with a notice. `new` always needs BigQuery, since it has nothing to work from but the
 live table.
 
 ---

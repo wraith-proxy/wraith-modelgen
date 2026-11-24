@@ -60,9 +60,9 @@ schema:
     physicalType: table
     description: "Fired when a user completes the signup flow."
 
-    # modelgen-specific dbt/layer config. Origin Data Product (raw) is a
-    # pass-through with optional dedup; Consumption Data Product (staging) is
-    # the stable contract whose renames and casts absorb upstream drift.
+    # modelgen-specific dbt/layer config. The raw layer is a pass-through
+    # with optional dedup; the staging layer is the stable interface whose
+    # renames and casts absorb upstream drift.
     customProperties:
       - property: modelgenLoadedAtField
         value: RECEIVED_AT

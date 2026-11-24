@@ -7,11 +7,13 @@ All paths in the config file are relative to the .modelgen.yml location.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import difflib
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
+from modelgen.contract import Issue
 from modelgen.errors import ModelgenError
 
 
@@ -22,6 +24,46 @@ class ConfigError(ModelgenError, ValueError):
 _DEFAULT_CONTRACTS = "contracts/*.yml"
 _DEFAULT_RAW_OUTPUT = "models/raw"
 _DEFAULT_STAGING_OUTPUT = "models/staging"
+_GLOB_KEYS = ("contracts", "schema_contracts", "sources_contracts")
+_KEYS = (
+    "contracts",
+    "raw_output",
+    "staging_output",
+    "schema_contracts",
+    "schema_output",
+    "sources_contracts",
+    "sources_output",
+    "tests_output",
+)
+
+
+def _key_notices(raw: dict) -> list[Issue]:
+    notices = []
+    for key in raw:
+        if key in _KEYS:
+            continue
+        near = difflib.get_close_matches(str(key), _KEYS, n=1)
+        hint = f"; did you mean {near[0]!r}?" if near else ""
+        notices.append(
+            Issue(
+                "config",
+                f"unknown key {key!r} is ignored{hint}",
+                severity="warning",
+            )
+        )
+    for kind in ("schema", "sources"):
+        pair = (f"{kind}_contracts", f"{kind}_output")
+        set_, unset = pair if raw.get(pair[0]) else pair[::-1]
+        if raw.get(set_) and not raw.get(unset):
+            notices.append(
+                Issue(
+                    "config",
+                    f"{set_!r} is set without {unset!r}; run and check"
+                    " skip it. Set both or neither",
+                    severity="warning",
+                )
+            )
+    return notices
 
 
 @dataclass
@@ -35,6 +77,7 @@ class ModelgenConfig:
     sources_contracts: str | None = None
     sources_output: Path | None = None
     tests_output: Path | None = None
+    notices: list[tuple[Path, Issue]] = field(default_factory=list)
 
     def contract_files(self) -> list[Path]:
         return sorted(self.root.glob(self.contracts_glob))
@@ -84,7 +127,21 @@ class ModelgenConfig:
             raise ConfigError(f"Failed to parse {path}: {e}") from e
         if not isinstance(raw, dict):
             raise ConfigError(f"{path} must be a YAML mapping.")
-        return cls._build(path.parent, raw)
+        for key in _KEYS:
+            value = raw.get(key)
+            if value is not None and not isinstance(value, str):
+                raise ConfigError(
+                    f"{key!r} must be a string, got"
+                    f" {type(value).__name__} in {path}"
+                )
+        for key in _GLOB_KEYS:
+            if raw.get(key) == "":
+                raise ConfigError(f"{key!r} must not be empty in {path}")
+        cfg = cls._build(
+            path.parent, {k: v for k, v in raw.items() if v is not None}
+        )
+        cfg.notices = [(path, n) for n in _key_notices(raw)]
+        return cfg
 
     @classmethod
     def discover(cls, start: Path) -> ModelgenConfig:

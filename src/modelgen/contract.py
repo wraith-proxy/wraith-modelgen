@@ -3,7 +3,7 @@ Data contract schema and parsing.
 
 Contracts are Open Data Contract Standard (ODCS) v3.0.2 documents. Source
 teams maintain them as part of their release process. modelgen propagates
-contract changes to dbt models; downstream FDPs see a stable interface
+contract changes to dbt models; downstream models see a stable interface
 because staging absorbs the drift.
 
 ODCS is a general standard; modelgen reads the subset it needs and carries
@@ -24,7 +24,7 @@ its BigQuery/dbt specifics in ODCS `customProperties`:
     property.primaryKey      -> contributes to unique_key (source names)
     property.required        -> not_null test
     property.unique          -> unique test
-    property.logicalTypeOptions.validValues -> accepted_values test
+    property.quality validValues -> accepted_values test (either form)
     property.classification  -> pii/psi; drives encryption in staging
     property.customProperties -> modelgenExempt (column-scoped)
   schema[].customProperties  -> modelgenLoadedAtField, modelgenSubjectField,
@@ -63,6 +63,7 @@ from modelgen.dialect import (
     supported_server_types,
 )
 from modelgen.errors import ModelgenError
+from modelgen.quality import staging_unmapped, valid_values
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -316,13 +317,11 @@ class StagingColumn:
         if prop.get("unique"):
             tests.append(ColumnTest("unique"))
         for check in prop.get("quality") or []:
-            if check.get("rule") == "validValues" and "validValues" in check:
-                tests.append(
-                    ColumnTest(
-                        "accepted_values",
-                        {"values": check["validValues"]},
-                    )
-                )
+            values = valid_values(check)
+            if values is not None:
+                test = ColumnTest("accepted_values", {"values": values})
+                if test not in tests:
+                    tests.append(test)
         return cls(
             source=source,
             name=name or source.lower(),
@@ -606,6 +605,7 @@ class EventContract:
     contract_version: str = ""  # ODCS top-level version
     pointer: str = ""  # JSON pointer of its ODCS schema object
     notices: tuple[Issue, ...] = ()
+    unmapped_rules: list[str] = field(default_factory=list)
 
     @property
     def classified_columns(self) -> list[StagingColumn]:
@@ -721,7 +721,7 @@ class EventContract:
                 f" Object: {obj.get('name')}."
             )
 
-        return cls(
+        event = cls(
             name=obj["name"],
             description=obj.get("description", ""),
             unique_key=_unique_key_from_properties(props),
@@ -748,6 +748,8 @@ class EventContract:
             pointer=pointer,
             notices=deprecation_notices(doc),
         )
+        event.unmapped_rules = staging_unmapped(obj, event.staging_model_name)
+        return event
 
 
 def select_schema_objects(

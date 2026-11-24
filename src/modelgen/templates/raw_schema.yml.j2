@@ -34,7 +34,7 @@ sources:
 
 models:
   - name: {{ event.raw_model_name }}
-    description: "Origin Data Product. {% if event.raw.dedup %}Deduplicated{% else %}Pass-through{% endif %} raw view of {{ event.name }}. Schema mirrors source; new columns flow through."
+    description: "Raw layer. {% if event.raw.dedup %}Deduplicated{% else %}Pass-through{% endif %} raw view of {{ event.name }}. Schema mirrors source; new columns flow through."
     config:
 {{ yml_config }}
     columns:

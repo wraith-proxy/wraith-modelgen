@@ -96,9 +96,9 @@ Each issue has:
 
 | Field | Meaning |
 |---|---|
-| `source` | The contract path. For a malformed `.modelgen.yml`, the config path. |
+| `source` | The contract path. For a malformed `.modelgen.yml`, the config path. For `dbt-package-missing`, the `dbt_project.yml` path. |
 | `object` | The schema object (event) name when known, else `null`. For `quality-rule-unmapped` it is the rule, as `<model>.<rule>`. |
-| `code` | A lint rule code (see [linting](linting.md)), or one of: `schema.<keyword>`, `yaml`, `limit`, `odcs-version` or `contract` (a contract or `.modelgen.yml` that could not be read); `odcs-version-deprecated` (a warning, see [compatibility](compatibility.md)); `quality-rule-unmapped` (a quality rule with no dbt test; an error under `--strict`); `generation` (a model could not be generated); `introspection` (a source table could not be introspected); `internal` (an unexpected error, exit `6`). |
+| `code` | A lint rule code (see [linting](linting.md)), or one of: `schema.<keyword>`, `yaml`, `limit`, `odcs-version` or `contract` (a contract or `.modelgen.yml` that could not be read); `odcs-version-deprecated` (a warning, see [compatibility](compatibility.md)); `quality-rule-unmapped` (a quality rule with no dbt test; an error under `--strict`); `generation` (a model could not be generated); `introspection` (a source table could not be introspected); `internal` (an unexpected error, exit `6`); `dbt-package-missing` (a warning from `run` and `check`: the dbt project does not install `dbt_expectations`, which the generated tests call). |
 | `severity` | `error` or `warning`. |
 | `message` | The human-readable message. |
 | `pointer` | JSON pointer into the contract (`""` is the document root), or `null`. |
@@ -193,8 +193,8 @@ modelgen gen CONTRACT [OPTIONS]
 
 | Option | Description |
 |---|---|
-| `--raw` | Raw (Origin Data Product) layer |
-| `--staging` | Staging (Consumption Data Product) layer |
+| `--raw` | Raw layer |
+| `--staging` | Staging layer |
 | `--layer schema` | Models yml for produced tables. Same output as `modelgen schema` |
 | `--layer sources` | Sources yml for extract contracts. Same output as `modelgen sources` |
 | `-o`, `--output PATH` | Write files here (default: `./models`) |
@@ -206,8 +206,10 @@ modelgen gen CONTRACT [OPTIONS]
 | `-v`, `--verbose` | Debug logging |
 
 `--layer` takes exactly `schema` or `sources` and cannot be combined with
-`--raw` or `--staging`. `gen` has no `--strict`; use `modelgen schema
---strict` or `modelgen sources --strict`.
+`--raw` or `--staging`. With `--staging`, the quality rules staging does
+not map are reported on stderr as `modelgen: N quality rule(s) not mapped:
+<model>.<rule>`. `gen` has no `--strict`; use `modelgen schema --strict` or
+`modelgen sources --strict`.
 
 Exit `2`: neither or both of `--raw`/`--staging` given, `--layer` combined
 with them, an unknown `--layer` value, or `--server` with `--layer sources`.
@@ -229,9 +231,8 @@ modelgen gen contracts/bus-marts.odcs.yaml --layer schema -o models/marts
 
 Write one `_<contract-name>__models.yml` for tables the project produces.
 Quality rules that map to dbt tests land under `tests/generated/` inside
-the output directory (or `--tests-output`, below). A property-level
-`rule: validValues` is not mapped here; it is reported as unmapped and
-becomes `accepted_values` only in the staging yml.
+the output directory (or `--tests-output`, below). A `validValues` rule,
+in either form, becomes an `accepted_values` test in the yml instead.
 
 ```bash
 modelgen schema contracts/bus-marts.odcs.yaml -o models/marts --strict
@@ -294,7 +295,7 @@ once per run, even when both layers use it.
 Unmapped quality rules print on stderr and `run` still exits `0`. `run` has no
 `--strict`; use `schema --strict` or `sources --strict` as a CI gate. `run`
 exits `1` when a `schema_contracts` or `sources_contracts` pattern matches
-nothing. A `*_contracts` key without its `*_output` key is skipped silently.
+nothing. A `*_contracts` key without its `*_output` key is skipped with a warning.
 
 ---
 
@@ -335,6 +336,36 @@ got committed all fail loudly:
     modelgen check --diff --from-contract
 ```
 
+That step compares the committed files with what the contracts render. It
+never reads the warehouse, so it cannot see a source table that has moved
+away from its contract. For BigQuery event contracts, run `check` with
+`--introspect` and Application Default Credentials instead. It is the CI
+gate for drift between contract and warehouse:
+
+```yaml
+# Needs Application Default Credentials in the job, for example
+# GOOGLE_APPLICATION_CREDENTIALS naming a service account key file
+- name: Verify contracts still match the warehouse
+  run: |
+    uv tool install wraith-modelgen
+    modelgen check --diff --introspect
+```
+
+- A contract column missing from the source table fails generation with
+  the column name, and `check` exits `1`.
+- A new source column changes the raw model's column list and shows as
+  drift on the raw model (exit `4`).
+- Without credentials it falls back to contract-only introspection and
+  prints `No GCP credentials found. Checking against contracts only.` A
+  green run there is not a warehouse check.
+- DuckDB event contracts and all produced and extract contracts are never
+  compared with a live table, with or without the flag. For them `check`
+  proves only that the committed files match the contract.
+
+Commit models generated with `modelgen run --introspect` for this gate, or
+`check` sees a different raw file (see
+[contract-only introspection](#offline-contract-only-introspection)).
+
 Exit `0`: in sync, or no contracts matched and no `schema_contracts` or
 `sources_contracts` pattern is set. Exit `4`: drift or missing files. A
 contract that fails to parse (`1`), lint (`3`) or introspect (`5`), a
@@ -347,7 +378,15 @@ failures the precedence above applies.
 ## Configuration: `.modelgen.yml`
 
 `run` and `check` read it; `gen`, `schema`, `sources` and `validate` never do.
-Paths are relative to the file. Unknown keys are ignored silently.
+Paths are relative to the file. Every key takes a string: any other value,
+such as `contracts: false`, is a config error (exit `1`) that names the key
+and the type it got (`'contracts' must be a string, got bool`). An empty
+string for `contracts`, `schema_contracts` or `sources_contracts` is a config
+error too. A key set to
+null counts as absent, so its default applies. Unknown keys are ignored with
+a warning that names the nearest valid key. Config warnings go to stderr and, with
+`--format json`, into `issues` with `severity: warning`. They do not change
+the exit code.
 
 ```yaml
 contracts: contracts/events/*.yml
@@ -372,7 +411,8 @@ tests_output: dbt/tests
 | `tests_output` | unset | `run`, `check` |
 
 - Set each `*_contracts` key together with its `*_output`; a pattern without
-  its output is skipped silently by `run` and `check`.
+  its output, or an output without its pattern, is skipped by `run` and
+  `check` with a warning.
 - `tests_output` replaces the leading `tests` of generated singular-test
   paths. Pair it with `--tests-output` on `schema`/`sources`.
 - The default `contracts` glob is `*.yml`. `*.odcs.yaml` files need their own
@@ -480,11 +520,14 @@ released install; do not commit it. Generated quality tests call
 
 ## Schema evolution
 
-Source schemas change. wraith-modelgen validates the boundary and reports what broke.
+Source schemas change. With `--introspect` on a BigQuery event contract,
+wraith-modelgen validates the boundary and reports what broke. Under
+contract-only introspection, the default, it never reads the source and
+reports none of the changes below.
 
 | Scenario | Behaviour |
 |---|---|
-| New column added to source | Does **not** appear until you regenerate. Run `modelgen run` (or `modelgen gen --raw`) to pick it up. Invisible in staging until added to the contract. |
+| New column added to source | Does **not** appear until you regenerate. Run `modelgen run --introspect` (or `modelgen gen --raw --introspect`) to pick it up. Invisible in staging until added to the contract. |
 | Source column renamed | Update the property's `physicalName` (the `primaryKey` property too, if applicable). The staging `name` stays stable downstream. |
 | Source column retyped | Update staging `type:`. The `CAST` absorbs it. If values are incompatible, the warehouse will fail at query time. |
 | Source column dropped | Generation fails if staging still references it. Update the contract or restore the source column. |

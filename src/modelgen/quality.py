@@ -3,8 +3,10 @@ ODCS quality rules mapped to dbt tests (schema mode).
 
 Mapping, per rule, in contract order:
 
-- invalidValues + arguments.validValues, mustBe 0 -> `accepted_values`
-  (NULL-tolerant `where` when the column is not required)
+- validValues, in either form, -> `accepted_values` (NULL-tolerant
+  `where` when the column is not required): the property form
+  `rule: validValues` + `validValues`, or the library form
+  `invalidValues` + `arguments.validValues`, mustBe 0
 - rowCount with a bound -> `expect_table_row_count_to_be_between`
 - duplicateValues mustBe 0 -> `unique` / compound-unique test
 - nullValues mustBe 0 -> `not_null`
@@ -83,6 +85,17 @@ def predicate(op: str, val: Any) -> str:
     if op == "mustNotBeBetween":
         return f"v not between {val[0]} and {val[1]}"
     return f"v {_SYMBOL[op]} {val}"
+
+
+def valid_values(rule: dict[str, Any]) -> list[Any] | None:
+    """The values a validValues rule accepts, in either form, else None."""
+    if rule.get("metric") == "invalidValues":
+        values = (rule.get("arguments") or {}).get("validValues")
+        ok = _operator(rule) == ("mustBe", 0)
+    else:
+        values = rule.get("validValues")
+        ok = rule.get("rule") == "validValues"
+    return list(values) if ok and values else None
 
 
 @dataclass
@@ -176,6 +189,34 @@ def _singular(
     return "\n".join(lines)
 
 
+def _rule_id(rule: dict[str, Any], ordinal: int) -> str:
+    return slug(str(rule["id"])) if rule.get("id") else f"rule{ordinal}"
+
+
+def _numbered_rules(
+    obj: dict[str, Any],
+) -> list[tuple[int, tuple[dict[str, Any], str | None]]]:
+    """Each rule with its 1-based ordinal and owning column (None for the
+    object); the one numbering `map_object` and `staging_unmapped` share."""
+    props = {str(p["name"]): p for p in obj.get("properties") or []}
+    rules: list[tuple[dict[str, Any], str | None]] = [
+        (r, None) for r in obj.get("quality") or []
+    ]
+    for pname, p in props.items():
+        rules += [(r, pname) for r in p.get("quality") or []]
+    return list(enumerate(rules, start=1))
+
+
+def staging_unmapped(obj: dict[str, Any], model: str) -> list[str]:
+    """`<model>.<rule>` for each rule event staging drops: every rule but
+    a property's validValues, numbered as `map_object` numbers them."""
+    return [
+        f"{model}.{_rule_id(rule, ordinal)}"
+        for ordinal, (rule, column) in _numbered_rules(obj)
+        if not (column is not None and valid_values(rule) is not None)
+    ]
+
+
 def map_object(
     obj: dict[str, Any],
     header: str,
@@ -192,15 +233,10 @@ def map_object(
     model = str(obj["name"])
     out = existing
     props = {str(p["name"]): p for p in obj.get("properties") or []}
-    rules: list[tuple[dict[str, Any], str | None]] = [
-        (r, None) for r in obj.get("quality") or []
-    ]
-    for pname, p in props.items():
-        rules += [(r, pname) for r in p.get("quality") or []]
 
     used: set[str] = set()
-    for ordinal, (rule, column) in enumerate(rules, start=1):
-        rid = slug(str(rule["id"])) if rule.get("id") else f"rule{ordinal}"
+    for ordinal, (rule, column) in _numbered_rules(obj):
+        rid = _rule_id(rule, ordinal)
         label = f"{model}.{rid}"
         if not _map_rule(
             rule, column, props, model, rid, label, header, used, out,
@@ -229,23 +265,24 @@ def _map_rule(
     query: str | None = None
     cols = [column] if column else []
 
+    values = valid_values(rule)
+    if values is not None:
+        if column is None:
+            return False
+        test: dict[str, Any] = {"values": values}
+        if not props[column].get("required") and not props[column].get(
+            "primaryKey"
+        ):
+            test["config"] = {"where": f"{column} is not null"}
+        _add(
+            out.column_tests.setdefault(column, []),
+            _with_severity({"accepted_values": test}, sev),
+        )
+        return True
+
     if rtype == "library":
         metric = rule.get("metric")
         args = rule.get("arguments") or {}
-        if metric == "invalidValues":
-            values = args.get("validValues")
-            if column is None or not values or comp != ("mustBe", 0):
-                return False
-            test: dict[str, Any] = {"values": list(values)}
-            if not props[column].get("required") and not props[column].get(
-                "primaryKey"
-            ):
-                test["config"] = {"where": f"{column} is not null"}
-            _add(
-                out.column_tests.setdefault(column, []),
-                _with_severity({"accepted_values": test}, sev),
-            )
-            return True
         if comp is None:
             return False
         if metric == "rowCount":
