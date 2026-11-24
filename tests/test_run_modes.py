@@ -300,3 +300,83 @@ def test_null_config_values_count_as_absent(tmp_path):
     assert res.stderr == ""
     assert list((tmp_path / "models" / "raw").glob("raw__*.sql"))
     assert list((tmp_path / "models" / "staging").glob("stg__*.sql"))
+
+
+MISSING_PACKAGE = "does not install dbt_expectations"
+
+
+def _dbt_project(tmp_path: Path) -> Path:
+    proj = _project(
+        tmp_path,
+        "bus-positions-extract",
+        "sources_contracts: contracts/*.odcs.yaml\n"
+        "sources_output: models/staging\n",
+    )
+    (proj / "dbt_project.yml").write_text("name: bus\n")
+    return proj
+
+
+def test_missing_dbt_expectations_warns_once_and_keeps_exit_codes(tmp_path):
+    proj = _dbt_project(tmp_path)
+    assert _cli("run", cwd=proj).stderr.count(MISSING_PACKAGE) == 1
+    result = _cli("check", "--format", "json", cwd=proj)
+    assert result.stderr.count(MISSING_PACKAGE) == 1
+    report = json.loads(result.stdout)
+    assert report["ok"] is True
+    assert [
+        i["severity"]
+        for i in report["issues"]
+        if MISSING_PACKAGE in i["message"]
+    ] == ["warning"]
+
+
+def test_no_dbt_project_at_or_below_the_config_dir_stays_silent(tmp_path):
+    proj = tmp_path / "repo"
+    proj.mkdir()
+    _dbt_project(proj)
+    assert MISSING_PACKAGE in _cli("run", cwd=proj).stderr
+    (proj / "dbt_project.yml").rename(tmp_path / "dbt_project.yml")
+    assert MISSING_PACKAGE not in _cli("run", cwd=proj).stderr
+
+
+@pytest.mark.parametrize(
+    "path, content",
+    [
+        (
+            "packages.yml",
+            "packages:\n  - package: metaplane/dbt_expectations\n"
+            '    version: [">=0.10.0", "<0.11.0"]\n',
+        ),
+        (
+            "dependencies.yml",
+            "packages:\n"
+            "  - git: https://example.com/fork/dbt_expectations.git\n",
+        ),
+        (
+            "dbt_packages/dbt_expectations/dbt_project.yml",
+            "name: dbt_expectations\n",
+        ),
+    ],
+    ids=["packages", "dependencies", "vendored"],
+)
+def test_installed_dbt_expectations_stays_silent(tmp_path, path, content):
+    proj = _dbt_project(tmp_path)
+    assert MISSING_PACKAGE in _cli("run", cwd=proj).stderr
+    (proj / path).parent.mkdir(parents=True, exist_ok=True)
+    (proj / path).write_text(content)
+    assert MISSING_PACKAGE not in _cli("run", cwd=proj).stderr
+
+
+def test_output_without_dbt_expectations_stays_silent(tmp_path):
+    proj = _dbt_project(tmp_path)
+    assert MISSING_PACKAGE in _cli("run", cwd=proj).stderr
+    contract = proj / "contracts" / "c.odcs.yaml"
+    contract.write_text(
+        contract.read_text().replace(
+            "customProperties:\n",
+            "customProperties:\n  - property: dbtColumnSetTest\n"
+            "    value: columns_match_set\n",
+            1,
+        )
+    )
+    assert MISSING_PACKAGE not in _cli("run", cwd=proj).stderr

@@ -263,9 +263,18 @@ Quality rules map per layer.
   quality tests.
 
 A list that must reach both layers has to be written in both forms, and
-`schema --strict` fails on the `rule: validValues` one. Generated quality
-tests call `dbt_expectations.*` macros; modelgen does not check the package is
-installed.
+`schema --strict` fails on the `rule: validValues` one.
+
+Generated quality tests call `dbt_expectations.*` macros. `run` and `check`
+warn once when the rendered output calls one and the dbt project does not
+install the package. They look for `dbt_project.yml` from each output
+directory up to the directory holding `.modelgen.yml`, never above it. The
+package counts as installed when `packages.yml` or `dependencies.yml` beside
+it contains `dbt_expectations` (any publisher, a fork too) or
+`dbt_packages/dbt_expectations` exists. The match is a substring, so a
+commented-out entry counts. No `dbt_project.yml` found means no warning.
+The warning does not change the exit code. `gen`, `schema` and `sources` do
+not check.
 
 ---
 
