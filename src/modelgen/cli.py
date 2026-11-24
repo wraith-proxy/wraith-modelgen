@@ -26,9 +26,7 @@ from modelgen.contract import (
 from modelgen.exit_codes import ExitCode
 from modelgen.generator import (
     GenerationError,
-    GenerationResult,
     Layer,
-    generate,
     write_generated,
 )
 from modelgen.introspect import IntrospectionError
@@ -41,8 +39,9 @@ from modelgen.project import (
     ProjectResult,
     check_project,
     dest_path,
-    failure_class,
+    render_event,
     run_project,
+    write_units,
 )
 from modelgen.report import (
     build_report,
@@ -445,7 +444,19 @@ def gen(
         else "contract-only introspection"
     )
 
-    results: list[tuple[EventContract, GenerationResult]] = []
+    def failed(p: Problem) -> None:
+        err_console.print(
+            f"[red]Generation failed ({p.label}):[/red] {p.message}"
+        )
+        err_console.print(
+            "[dim]Fix the contract or the source. Then try again.[/dim]"
+        )
+        issues.append(
+            plain_issue(contract, p.code, p.message, object_name=p.label)
+        )
+        finish(p.exit_code)
+
+    units = []
     for event in events:
         introspector = chooser.for_event(event)
 
@@ -474,75 +485,51 @@ def gen(
                 )
             )
 
-        try:
-            result = generate(
-                contract=event,
-                introspector=introspector,
-                output_dir=output,
-                layer=layer,
-                dry_run=dry_run,
-            )
-        except (GenerationError, IntrospectionError) as e:
-            err_console.print(
-                f"[red]Generation failed ({event.name}):[/red] {e}"
-            )
-            err_console.print(
-                "[dim]Fix the contract or the source. Then try again.[/dim]"
-            )
-            exit_code, issue_code = failure_class(e)
-            issues.append(
-                plain_issue(
-                    contract, issue_code, str(e), object_name=event.name
-                )
-            )
-            finish(exit_code)
-        results.append((event, result))
+        item = render_event(
+            contract, event.name, event, layer, output, introspector
+        )
+        if isinstance(item, Problem):
+            failed(item)
+        units.append(item)
+
+    result = write_units(
+        units, ProjectResult([], [], [], [], []), dry_run=dry_run, atomic=True
+    )
+    if result.problems:
+        failed(result.problems[0])
 
     table_out = Table(show_header=True, header_style="bold cyan")
     table_out.add_column("File")
     table_out.add_column("Status")
-    for _, result in results:
-        for path, content in zip(
-            result.written, result.artefacts.values(), strict=True
-        ):
-            status = (
-                "[yellow]dry-run[/yellow]"
-                if dry_run
-                else "[green]written[/green]"
-            )
-            table_out.add_row(str(path), status)
-            entries.append(
-                file_entry(
-                    path,
-                    layer.value,
-                    content,
-                    "dry_run" if dry_run else "written",
-                )
-            )
+    for f in result.files:
+        status = (
+            "[yellow]dry-run[/yellow]" if dry_run else "[green]written[/green]"
+        )
+        table_out.add_row(str(f.path), status)
+        entries.append(file_entry(f.path, f.layer, f.content, f.status.value))
     if not as_json:
         console.print(table_out)
     if layer == Layer.STAGING:
-        unmapped = [r for event, _ in results for r in event.unmapped_rules]
+        unmapped = [r for event in events for r in event.unmapped_rules]
         if unmapped:
             _print_unmapped(unmapped)
             issues.extend(unmapped_issues(contract, unmapped))
 
-    for event, result in results:
-        if result.new_source_columns:
-            err_console.print(
-                Panel(
-                    f"[bold]{event.name}:"
-                    f" {len(result.new_source_columns)} new source"
-                    " column(s) not yet in staging:[/bold]\n"
-                    f"  [cyan]{', '.join(result.new_source_columns)}"
-                    "[/cyan]\n\n"
-                    "[dim]Flowing through raw automatically."
-                    " Add to the staging contract when consumers need"
-                    " them.[/dim]",
-                    title="[yellow]⚠ Schema evolution detected[/yellow]",
-                    border_style="yellow",
-                )
+    for event_name, cols in result.new_source_columns:
+        err_console.print(
+            Panel(
+                f"[bold]{event_name}:"
+                f" {len(cols)} new source"
+                " column(s) not yet in staging:[/bold]\n"
+                f"  [cyan]{', '.join(cols)}"
+                "[/cyan]\n\n"
+                "[dim]Flowing through raw automatically."
+                " Add to the staging contract when consumers need"
+                " them.[/dim]",
+                title="[yellow]⚠ Schema evolution detected[/yellow]",
+                border_style="yellow",
             )
+        )
     finish(ExitCode.OK)
 
 

@@ -123,12 +123,9 @@ def _yaml_str(value: object) -> str:
     ).rstrip("\n")
 
 
-def write_generated(dest: Path, content: str, *roots: Path | None) -> None:
-    """Write one generated file inside one of `roots`.
-
-    A destination that is a symlink, or that resolves outside every root,
-    is refused: either would let input redirect the write.
-    """
+def check_destination(dest: Path, *roots: Path | None) -> None:
+    """Refuse a destination that is a symlink or resolves outside every
+    root: either would let input redirect the write."""
     real = dest.resolve()
     inside = any(r and real.is_relative_to(r.resolve()) for r in roots)
     if dest.is_symlink() or not inside:
@@ -136,6 +133,11 @@ def write_generated(dest: Path, content: str, *roots: Path | None) -> None:
             f"Refusing to write {dest}: it is a symlink or resolves"
             " outside the output directory."
         )
+
+
+def write_generated(dest: Path, content: str, *roots: Path | None) -> None:
+    """Write one generated file inside one of `roots`."""
+    check_destination(dest, *roots)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content)
 

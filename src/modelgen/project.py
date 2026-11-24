@@ -13,11 +13,16 @@ from modelgen.exit_codes import ExitCode, worst
 from modelgen.generator import (
     GenerationError,
     Layer,
+    check_destination,
     generate,
     mask_version,
     write_generated,
 )
-from modelgen.introspect import IntrospectionError, IntrospectorChooser
+from modelgen.introspect import (
+    IntrospectionError,
+    Introspector,
+    IntrospectorChooser,
+)
 from modelgen.lint import errors as lint_errors
 from modelgen.lint import lint_contract
 
@@ -207,6 +212,49 @@ def _installs_expectations(directory: Path) -> bool:
     )
 
 
+def render_event(
+    contract_path: Path,
+    label: str,
+    event: EventContract,
+    layer: Layer,
+    output_dir: Path,
+    introspector: Introspector,
+) -> _Unit | Problem:
+    """One layer of one event, rendered in memory."""
+    try:
+        result = generate(
+            contract=event,
+            introspector=introspector,
+            output_dir=output_dir,
+            layer=layer,
+            dry_run=True,
+        )
+    except (GenerationError, IntrospectionError) as e:
+        code, issue_code = failure_class(e)
+        return Problem(
+            contract_path,
+            label,
+            layer.value,
+            str(e),
+            code,
+            event=event.name,
+            code=issue_code,
+        )
+    return _Unit(
+        contract_path,
+        label,
+        layer.value,
+        [
+            (output_dir / name, content)
+            for name, content in result.artefacts.items()
+        ],
+        (output_dir,),
+        (event.name, result.new_source_columns)
+        if result.new_source_columns
+        else None,
+    )
+
+
 def _render(
     cfg: ModelgenConfig,
     *,
@@ -268,47 +316,19 @@ def _render(
                 layers.append((Layer.STAGING, cfg.staging_output))
 
             for layer, output_dir in layers:
-                try:
-                    result = generate(
-                        contract=event,
-                        introspector=introspector,
-                        output_dir=output_dir,
-                        layer=layer,
-                        dry_run=True,
-                    )
-                except (GenerationError, IntrospectionError) as e:
-                    code, issue_code = failure_class(e)
-                    events.items.append(
-                        Problem(
-                            contract_path,
-                            label,
-                            layer.value,
-                            str(e),
-                            code,
-                            event=event.name,
-                            code=issue_code,
-                        )
-                    )
-                    continue
-                if layer == Layer.STAGING:
+                item = render_event(
+                    contract_path,
+                    label,
+                    event,
+                    layer,
+                    output_dir,
+                    introspector,
+                )
+                if isinstance(item, _Unit) and layer == Layer.STAGING:
                     events.unmapped.extend(
                         (contract_path, r) for r in event.unmapped_rules
                     )
-                events.items.append(
-                    _Unit(
-                        contract_path,
-                        label,
-                        layer.value,
-                        [
-                            (output_dir / name, content)
-                            for name, content in result.artefacts.items()
-                        ],
-                        (output_dir,),
-                        (event.name, result.new_source_columns)
-                        if result.new_source_columns
-                        else None,
-                    )
-                )
+                events.items.append(item)
 
     produced = _Rendered()
     for contract_path, mode, dest, content in _produced_files(
@@ -381,9 +401,46 @@ def run_project(
         notify=notify,
         produced_first=False,
     )
-    result = _empty_result(rendered)
+    return write_units(
+        rendered.items, _empty_result(rendered), dry_run=dry_run
+    )
+
+
+def _refused(unit: _Unit, e: GenerationError) -> Problem:
+    return Problem(
+        unit.contract,
+        unit.label,
+        unit.layer,
+        str(e),
+        ExitCode.INVALID,
+        code="generation",
+    )
+
+
+def write_units(
+    items: list[_Unit | Problem],
+    result: ProjectResult,
+    *,
+    dry_run: bool,
+    atomic: bool = False,
+) -> ProjectResult:
+    """Write each unit unless dry_run and record the outcomes in `result`.
+
+    A refused unit is a problem and the rest are still written, unless
+    `atomic`: then every destination is checked first and one refusal
+    writes nothing.
+    """
+    if atomic and not dry_run:
+        for item in items:
+            if isinstance(item, _Unit):
+                try:
+                    for dest, _ in item.files:
+                        check_destination(dest, *item.roots)
+                except GenerationError as e:
+                    result.problems.append(_refused(item, e))
+                    return result
     status = FileStatus.DRY_RUN if dry_run else FileStatus.WRITTEN
-    for item in rendered.items:
+    for item in items:
         if isinstance(item, Problem):
             result.problems.append(item)
             continue
@@ -392,16 +449,7 @@ def run_project(
                 for dest, content in item.files:
                     write_generated(dest, content, *item.roots)
             except GenerationError as e:
-                result.problems.append(
-                    Problem(
-                        item.contract,
-                        item.label,
-                        item.layer,
-                        str(e),
-                        ExitCode.INVALID,
-                        code="generation",
-                    )
-                )
+                result.problems.append(_refused(item, e))
                 continue
         result.files.extend(
             FileOutcome(item.contract, item.layer, dest, content, status)
