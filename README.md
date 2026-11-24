@@ -659,7 +659,7 @@ Clean output ends with `Everything in sync. <n> file(s) match their contracts.` 
 ### Limitations
 
 - The version falls back to `0.0.0` when the package is not installed.
-- Generated quality tests call `dbt_expectations.*` macros. The consuming dbt project must install the dbt-expectations package. modelgen does not check for it.
+- Generated quality tests call `dbt_expectations.*` macros. The consuming dbt project must install the dbt-expectations package. `run` and `check` warn once when it is missing, but only for a `dbt_project.yml` at or below the directory holding `.modelgen.yml`, and they count any mention of `dbt_expectations` in `packages.yml` or `dependencies.yml`, or a `dbt_packages/dbt_expectations` directory, as installed. `gen`, `schema` and `sources` do not check.
 
 ---
 
