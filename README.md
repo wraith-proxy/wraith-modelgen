@@ -7,9 +7,9 @@
 # 👻 wraith-modelgen
 ### *Sovereign dbt Scaffolding for the Ghost Stack*
 
-**wraith-modelgen** is a dbt scaffolder. Feed it a YAML data contract (Open Data Contract Standard, ODCS) and it writes dbt models for BigQuery or DuckDB: an Origin (raw) layer that passes everything through, and a Consumption (staging) layer that holds the stable line for downstream consumers. It also writes the schema and sources yml for the tables your project produces and reads.
+**wraith-modelgen** is a dbt scaffolder. Feed it a YAML data contract (Open Data Contract Standard, ODCS) and it writes dbt models for BigQuery or DuckDB: a raw layer that passes everything through, and a staging layer that holds a stable interface for downstream models. It also writes the schema and sources yml for the tables your project produces and reads.
 
-Source schemas change. Columns get renamed, types get tightened, and new fields appear without warning. In most analytics codebases that change lands downstream: dashboards break, FDPs fail, and the analytics team finds out from a support ticket.
+Source schemas change. Columns get renamed, types get tightened, and new fields appear without warning. In most analytics codebases that change lands downstream: dashboards break, models fail, and the analytics team finds out from a support ticket.
 
 wraith-modelgen makes the data contract the change-management mechanism. The source team updates it as part of their release. wraith-modelgen regenerates the models. Downstream sees what it sees. Nothing breaks unless something it actually depended on disappears, which triggers a generation failure with the column name.
 
@@ -103,8 +103,8 @@ It prints one `<path> dry-run` line per file and exits `0`.
 
 | Flag | Meaning |
 |------|---------|
-| `--raw` | Raw (Origin Data Product) layer. Everything in, nothing filtered. |
-| `--staging` | Staging (Consumption Data Product) layer. |
+| `--raw` | Raw layer. Everything in, nothing filtered. |
+| `--staging` | Staging layer. |
 | `--layer schema` | Models yml for produced tables. Same output as `modelgen schema`. |
 | `--layer sources` | Sources yml for extract contracts. Same output as `modelgen sources`. |
 | `-o, --output DIR` | Output directory. Default `./models`. |
@@ -655,6 +655,7 @@ Clean output ends with `Everything in sync. <n> file(s) match their contracts.` 
 - Several schema objects per contract: `gen` writes one model per object, in contract order. Check model names if a contract has several objects.
 - Pin `--server` if a contract lists several servers. Without it, the first `type: bigquery` server wins, then the first server of a supported type.
 - `contract_path` on `render_raw`, `render_staging` and `generate` is ignored and warns. Stop passing it.
+- Generated descriptions changed. Raw and staging SQL headers and yml descriptions now say "Raw layer" and "Staging layer", call staging a stable interface and name downstream models, in place of an organisation-specific taxonomy. `modelgen check` reports drift on every committed raw and staging file until you regenerate, and `modelgen run` clears it. This ships as a patch only because the version header already makes every committed file drift on each release.
 
 ### Limitations
 

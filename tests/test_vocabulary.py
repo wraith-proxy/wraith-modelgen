@@ -3,8 +3,6 @@
 import re
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).parent.parent
 SCANNED = (
     "src", "docs", "README.md", "GLOSSARY.md", "contracts", "models", "tests",
@@ -31,7 +29,6 @@ def _scanned_files():
                 yield rel
 
 
-@pytest.mark.xfail(strict=True, reason="layer taxonomy not removed yet")
 def test_no_layer_taxonomy_in_paths_or_contents():
     hits = []
     for rel in _scanned_files():

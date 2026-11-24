@@ -193,8 +193,8 @@ modelgen gen CONTRACT [OPTIONS]
 
 | Option | Description |
 |---|---|
-| `--raw` | Raw (Origin Data Product) layer |
-| `--staging` | Staging (Consumption Data Product) layer |
+| `--raw` | Raw layer |
+| `--staging` | Staging layer |
 | `--layer schema` | Models yml for produced tables. Same output as `modelgen schema` |
 | `--layer sources` | Sources yml for extract contracts. Same output as `modelgen sources` |
 | `-o`, `--output PATH` | Write files here (default: `./models`) |
