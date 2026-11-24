@@ -61,7 +61,7 @@ A contract may be written by another team, and dbt later runs the generated file
 - names a schema object or dbt source with characters outside letters, digits, `_`, `.` and `-` (produced and extract contracts; event contracts have the stricter lint rule);
 - is larger than 1 MB, nests more than 64 levels deep, or expands through YAML aliases to more than a million nodes.
 
-Column descriptions, from the contract or from BigQuery, are written as quoted YAML strings and cannot add keys to a generated file. Every generated file is written inside the output directory; a destination that is a symlink or resolves elsewhere is refused.
+Column descriptions, from the contract or from BigQuery, are written as quoted YAML strings and cannot add keys to a generated file. Every generated file is written inside the output directory; a destination that is a symlink or resolves elsewhere is refused. `gen`, `schema` and `sources` check every destination before writing, so one refusal writes nothing. `run` writes the contracts and layers that pass and reports the refused one.
 
 One thing a contract can still do by design: a `type: sql` quality rule is copied into a dbt test. Review produced and extract contracts as you would review code.
 

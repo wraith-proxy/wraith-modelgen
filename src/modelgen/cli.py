@@ -210,6 +210,17 @@ def _print_unmapped(rules: list[str]) -> None:
     )
 
 
+def _report_unmapped(
+    contract: Path,
+    rules: list[str],
+    issues: list[dict],
+    severity: str = "warning",
+) -> None:
+    if rules:
+        _print_unmapped(rules)
+        issues.extend(unmapped_issues(contract, rules, severity))
+
+
 def _notify(message: str) -> None:
     err_console.print(f"[yellow]{escape(message)}[/yellow]")
 
@@ -508,10 +519,9 @@ def gen(
     if not as_json:
         console.print(table_out)
     if layer == Layer.STAGING:
-        unmapped = [r for event in events for r in event.unmapped_rules]
-        if unmapped:
-            _print_unmapped(unmapped)
-            issues.extend(unmapped_issues(contract, unmapped))
+        _report_unmapped(
+            contract, [r for e in events for r in e.unmapped_rules], issues
+        )
 
     for event_name, cols in result.new_source_columns:
         err_console.print(
@@ -629,16 +639,11 @@ def _write_schema(
         if not as_json:
             label = "dry-run" if dry_run else "written"
             console.print(f"{escape(str(f.path))} {label}", highlight=False)
-    if unmapped:
-        _print_unmapped(unmapped)
-        failed = strict
-        issues.extend(
-            unmapped_issues(
-                contract, unmapped, "error" if failed else "warning"
-            )
-        )
-        if failed:
-            finish(ExitCode.LINT)
+    _report_unmapped(
+        contract, unmapped, issues, "error" if strict else "warning"
+    )
+    if unmapped and strict:
+        finish(ExitCode.LINT)
     finish(ExitCode.OK)
 
 
