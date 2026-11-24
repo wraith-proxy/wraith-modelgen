@@ -8,6 +8,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Initial commit. Ghost Stack project scaffold. Nothing generated yet.
 
+## v0.19.0 (2026-11-24)
+
+### Bug Fixes
+
+- share rule numbering between map_object and staging_unmapped' (#41) from feature/TJP-34111 into main
+- share rule numbering between map_object and staging_unmapped
+- reject empty glob keys in .modelgen.yml
+- merge feature/TJP-34111
+- report unmapped quality rules on event staging
+- docs claim no more than contract-only introspection
+- merge feature/TJP-34111
+- merge feature/TJP-38111
+- reject non-string .modelgen.yml values as config errors
+- layer words in docs, README and example contract
+- name the taxonomy fixtures for what they hold
+- layer words in CLI help and module docstrings
+- layer words in generated raw and staging output
+- guard against the layer taxonomy
+- warn on unknown and orphaned .modelgen.yml keys
+- restamp golden and model headers to 0.18.0
+
+### Features
+
+- map both validValues forms in every mode
+- warn when the dbt project lacks dbt_expectations
+
 ## v0.18.0 (2026-11-21)
 
 ### Bug Fixes
