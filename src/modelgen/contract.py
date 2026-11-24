@@ -3,7 +3,7 @@ Data contract schema and parsing.
 
 Contracts are Open Data Contract Standard (ODCS) v3.0.2 documents. Source
 teams maintain them as part of their release process. modelgen propagates
-contract changes to dbt models; downstream FDPs see a stable interface
+contract changes to dbt models; downstream models see a stable interface
 because staging absorbs the drift.
 
 ODCS is a general standard; modelgen reads the subset it needs and carries

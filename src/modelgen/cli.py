@@ -293,13 +293,12 @@ def gen(
     raw: bool = typer.Option(
         False,
         "--raw",
-        help="Generate the raw (Origin Data Product) layer."
-        " Everything in, nothing filtered.",
+        help="Generate the raw layer. Everything in, nothing filtered.",
     ),
     staging: bool = typer.Option(
         False,
         "--staging",
-        help="Generate the staging (Consumption Data Product) layer."
+        help="Generate the staging layer."
         " Source schema changes stay upstream.",
     ),
     output: Path = typer.Option(
@@ -890,7 +889,7 @@ def run(
 
     \b
     Default outputs:
-      models/raw/     -- raw (Origin Data Product) layer
+      models/raw/     -- raw layer
       models/staging/ -- staging layer (skipped if no columns declared)
 
     \b
